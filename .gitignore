@@ -1,0 +1,8 @@
+# file types
+*.pyc
+# directories
+logs/
+hsrb_moveit/
+# files
+wandb/
+/scripts/paper/

@@ -1,0 +1,214 @@
+wandb_version: 1
+
+_wandb:
+  desc: null
+  value:
+    cli_version: 0.10.11
+    framework: torch
+    is_jupyter_run: false
+    is_kaggle_kernel: false
+    python_version: 3.6.10
+algo:
+  desc: null
+  value: SAC
+alpha_direct_rng:
+  desc: null
+  value: 1.57
+arctan2_alpha:
+  desc: null
+  value: true
+batch_size:
+  desc: null
+  value: 64
+buffer_size:
+  desc: null
+  value: 100000
+debug:
+  desc: null
+  value: false
+device:
+  desc: null
+  value: cuda
+dry_run:
+  desc: null
+  value: false
+early_stop_after_evals:
+  desc: null
+  value: 25
+early_stop_metric:
+  desc: null
+  value:
+  - eval_rStart_rGoals/num_kin_fail
+  - min
+early_stop_n_avg:
+  desc: null
+  value: 25
+ent_coef:
+  desc: null
+  value: auto
+env:
+  desc: null
+  value: tiago
+eval_execs:
+  desc: null
+  value:
+  - gazebo
+  - sim
+eval_tasks:
+  desc: null
+  value:
+  - rndstartrndgoal
+  - restrictedws
+  - picknplace
+  - door
+  - drawer
+evaluation_frequency:
+  desc: null
+  value: 20000
+evaluation_only:
+  desc: null
+  value: false
+explore_noise:
+  desc: null
+  value: 0.75
+explore_noise_type:
+  desc: null
+  value: normal
+gamma:
+  desc: null
+  value: 0.99
+hsr_ik_slack_dist:
+  desc: null
+  value: 0.1
+hsr_ik_slack_rot_dist:
+  desc: null
+  value: 0.05
+hsr_ik_slack_schedule:
+  desc: null
+  value: false
+hsr_sol_dist_reward:
+  desc: null
+  value: false
+ik_fail_thresh:
+  desc: null
+  value: 19
+ik_fail_thresh_eval:
+  desc: null
+  value: 99
+learn_gripper:
+  desc: null
+  value: false
+load_best_defaults:
+  desc: null
+  value: true
+logpath:
+  desc: null
+  value: scripts/logs
+lr_end:
+  desc: null
+  value: 1.0e-06
+lr_gamma:
+  desc: null
+  value: 0.999
+lr_start:
+  desc: null
+  value: 1.0e-05
+lr_step:
+  desc: null
+  value: 1
+noise_bias:
+  desc: null
+  value: 0
+noise_clip:
+  desc: null
+  value: 0.5
+noise_decay:
+  desc: null
+  value: 0
+nr_evaluations:
+  desc: null
+  value: 50
+nstep:
+  desc: null
+  value: 1
+pause_gripper_action:
+  desc: null
+  value: false
+penalty_scaling:
+  desc: null
+  value: 0.1
+perform_collision_check:
+  desc: null
+  value: true
+policy_frequency:
+  desc: null
+  value: 2
+policy_noise:
+  desc: null
+  value: 0.1
+real_execution:
+  desc: null
+  value: sim
+restore_model:
+  desc: null
+  value: false
+resume_id:
+  desc: null
+  value: null
+resume_model_name:
+  desc: null
+  value: last_model.zip
+rm_task_objects:
+  desc: null
+  value: null
+rnd_steps:
+  desc: null
+  value: 0
+seed:
+  desc: null
+  value: 48
+slow_down_real_exec:
+  desc: null
+  value: 1
+stack_k_obs:
+  desc: null
+  value: 1
+start_launchfiles_no_controllers:
+  desc: null
+  value: false
+strategy:
+  desc: null
+  value: dirvel
+task:
+  desc: null
+  value: rndstartrndgoal
+tau:
+  desc: null
+  value: 0.001
+time_step:
+  desc: null
+  value: 0.02
+total_steps:
+  desc: null
+  value: 1000000
+transition_noise_base:
+  desc: null
+  value: 0
+transition_noise_ee:
+  desc: null
+  value: 0
+uniform_action_share:
+  desc: null
+  value: 0
+use_base_goal:
+  desc: null
+  value: false
+use_sde:
+  desc: null
+  value: false
+version:
+  desc: null
+  value: 7.5
+vis_env:
+  desc: null
+  value: true

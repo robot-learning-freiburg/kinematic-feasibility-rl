@@ -1,0 +1,36 @@
+name: modulation_rl
+channels:
+  - pytorch
+  - defaults
+  - conda-forge
+dependencies:
+#  INSTALLING A NEW PYTHON WILL SCREW WITH TORCH IN DOCKER
+#  - python=3.6
+#  - pytorch
+#  - torchvision
+#  - cudatoolkit=10.2
+  - pybind11
+  - numpy
+  - pip
+  - matplotlib
+#  - ninja
+#  - pyyaml
+#  - mkl
+#  - mkl-include
+#  - setuptools
+#  - cmake
+#  - cffi
+#  - magma-cuda102
+  - empy
+  - pyparsing
+  - pillow
+  - seaborn
+  - pip:
+      - wandb
+      - stable-baselines3==0.10.0
+      - tensorboard
+      # NOTE: require to not have the python2 version in PYTHONPATH
+      - roslibpy
+      - rospkg
+      - gym
+      - cloudpickle==1.5.0

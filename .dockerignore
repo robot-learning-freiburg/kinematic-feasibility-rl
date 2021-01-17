@@ -1,0 +1,7 @@
+.idea/
+logs/
+wandb/
+scripts/logs/
+scripts/best_models/
+scripts/paper/
+*.npy
