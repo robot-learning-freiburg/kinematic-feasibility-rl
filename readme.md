@@ -3,13 +3,11 @@
 Repository providing the source code for the paper "Learning kinematic feasibility through reinforcement learning", see the [project website](https://rl.uni-freiburg.de/research/kinematic-feasibility-rl).  
 Please cite the paper as follows:
 
-    @misc{honerkamp2021learning,
+    @article{honerkamp2021learning,
       title={Learning Kinematic Feasibility for Mobile Manipulation through Deep Reinforcement Learning}, 
       author={Daniel Honerkamp and Tim Welschehold and Abhinav Valada},
+      journal={arXiv preprint arXiv:2101.05325},
       year={2021},
-      eprint={2101.05325},
-      archivePrefix={arXiv},
-      primaryClass={cs.RO}
     }
     
 ## Docker
