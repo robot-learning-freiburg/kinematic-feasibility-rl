@@ -26,5 +26,8 @@
     <arg name="robot_pos" value="-x 0 -y 0 -z 0 -Y 0" />
   </include>
 
-<!--   <node pkg="fake_localization" type="fake_localization" name="fake_localization" output="screen" /> -->
+  <node pkg="fake_localization" type="fake_localization" name="fake_localization">
+    <remap from="base_pose_ground_truth" to="hsrb/odom_ground_truth"/>
+    <remap from="initialpose"            to="initialpose"/>
+  </node>
 </launch>

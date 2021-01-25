@@ -15,14 +15,17 @@ Easiest way to get started is to pull the docker image
 	
     docker pull dhonerkamp/kinematic-feasibility-rl:latest
 
-The current implementation relies on the Weights And Biases library for logging. 
+The current implementation relies on the Weights And Biases library for logging.
 So create a python3 environment with wandb (free account required) and run `wandb login` to login to your account.
-The following commands also assume that you have a CUDA-capable GPU and the nvidia-docker driver installed. To only use the CPU remove the `--gpus` flag. 
+Alternatively first run `wandb disabled` in your shell to run it without an account and without logging any results 
+(evaluations still get printed to stdout).
 
-To train a model simply run the following command. Currently we have environments for the PR2, Tiago and HSR (for the HSR please read the note below)
+The following commands also assume that you have docker installed, and to use a CUDA-capable GPUs also the nvidia-docker driver. To only use the CPU remove the `--gpus` flag. 
 
-    env=pr2
-    wandb docker-run --rm -d --gpus=all -e ROBOT=$env -e STARTUP=$env dhonerkamp/kinematic-feasibility-rl:latest bash ros_startup_incl_train.sh "python scripts/main.py --load_best_defaults --env $env" 
+To train a model simply run the following command. Currently we provide environments for the PR2, Tiago and HSR (for the HSR please read the note below)
+
+    env=pr2  # all lower-case
+    wandb docker-run --rm --gpus=all -e ROBOT=$env -e STARTUP=$env dhonerkamp/kinematic-feasibility-rl:latest bash ros_startup_incl_train.sh "python scripts/main.py --load_best_defaults --env $env" 
 
 We provide trained model checkpoints for each of the robots in `scipts/model_checkpoints`. To evaluate them add the following flags
 

@@ -1,29 +1,25 @@
-import time
 import os
-import sys
-import numpy as np
 from pathlib import Path
 from typing import Callable, Union
-import torch
+
+import numpy as np
 import wandb
 from matplotlib import pyplot as plt
+
 plt.style.use('seaborn')
 import rospy
 
 # from stable_baselines3.common.buffers import NStepReplayBuffer, ReplayBuffer
 from stable_baselines3.sac import SAC
 from stable_baselines3.td3 import TD3
-from stable_baselines3.common.env_checker import check_env
-from stable_baselines3.common.monitor import Monitor
 from stable_baselines3.common.noise import OrnsteinUhlenbeckActionNoise, NormalActionNoise
-from stable_baselines3.common import logger
 from stable_baselines3.common.callbacks import CallbackList
 
-from modulation.utils import setup_config, delete_dir, traced
-from modulation.stableBLCallbacks import ModulationEvalCallback, evaluate_policy, calc_dist_to_sol, IKSlackScheduleCallback
-from modulation.envs.modulationEnv import ModulationEnv
+from modulation.utils import setup_config
+from modulation.stableBLCallbacks import ModulationEvalCallback, IKSlackScheduleCallback
 from modulation.envs.env_utils import get_env, wrap_in_task
-from modulation.envs.tasks import BaseTask, RndStartRndGoalsTask, RestrictedWsTask, BaseChainedTask, PickNPlaceChainedTask, DoorChainedTask, DrawerChainedTask
+
+
 # do not upload model checkpoints
 # os.environ['WANDB_IGNORE_GLOBS'] = '*.zip'
 
@@ -68,9 +64,11 @@ def sync_all(file_log, sync_model: bool):
 def construct_agent(config, env, tensorboard_log, restore_model_path: str = None, restore_kwargs=None):
     if config.explore_noise:
         if config.explore_noise_type == 'normal':
-            action_noise = NormalActionNoise(mean=np.zeros(env.action_space.shape), sigma=config.explore_noise * np.ones(env.action_space.shape))
+            action_noise = NormalActionNoise(mean=np.zeros(env.action_space.shape),
+                                             sigma=config.explore_noise * np.ones(env.action_space.shape))
         elif config.explore_noise_type == 'OU':
-            action_noise = OrnsteinUhlenbeckActionNoise(mean=np.zeros(env.action_space.shape), sigma=config.explore_noise * np.ones(env.action_space.shape))
+            action_noise = OrnsteinUhlenbeckActionNoise(mean=np.zeros(env.action_space.shape),
+                                                        sigma=config.explore_noise * np.ones(env.action_space.shape))
         else:
             raise ValueError(f"Unknown action noise {config.explore_noise_type}")
     else:
@@ -100,6 +98,7 @@ def construct_agent(config, env, tensorboard_log, restore_model_path: str = None
         assert 0 <= min_lr <= start_lr
         assert total_decay_steps >= 1
         return lambda progress_remaining: lin_sched(progress_remaining)
+
     lr_fn = create_lr_schedule(start_lr=config.lr_start,
                                min_lr=config.lr_end,
                                gamma=config.lr_gamma,
@@ -135,7 +134,7 @@ def construct_agent(config, env, tensorboard_log, restore_model_path: str = None
                     # use_sde_at_warmup=,
                     # policy_kwargs=
                     **common_args)
-    elif config.algo =='TD3':
+    elif config.algo == 'TD3':
         # nstep
         # pip install git+https://github.com/PartiallyTyped/stable-baselines3.git@nstep
         # if config.nstep != 1:
@@ -191,14 +190,12 @@ def learning_loop(config, eval_env, agent, file_log: str):
                                            eval_freq=config.evaluation_frequency,
                                            log_path=file_log,
                                            best_model_save_path=file_log,
-                                           early_stop_metric=config.early_stop_metric[0],
-                                           comparison=config.early_stop_metric[1],
-                                           early_stop_after_evals=config.early_stop_after_evals,
-                                           n_avg=config.early_stop_n_avg,
                                            debug=config.debug
                                            )
     if config.hsr_ik_slack_schedule:
-        ik_slack_cb = IKSlackScheduleCallback(start_dist_slack=config.hsr_ik_slack_dist, end_dist_slack=0.02, start_rot_slack=config.hsr_ik_slack_rot_dist, end_rot_slack=0.05, total_timesteps=config.total_steps)
+        ik_slack_cb = IKSlackScheduleCallback(start_dist_slack=config.hsr_ik_slack_dist, end_dist_slack=0.02,
+                                              start_rot_slack=config.hsr_ik_slack_rot_dist, end_rot_slack=0.05,
+                                              total_timesteps=config.total_steps)
         cbs = CallbackList([eval_callback, ik_slack_cb])
     else:
         cbs = eval_callback
@@ -216,10 +213,8 @@ def learning_loop(config, eval_env, agent, file_log: str):
     rospy.loginfo("Training finished")
 
 
-def evaluate_on_task(config, eval_env, agent, task: str, real_exec: str,
-                     file_log: str, time_step: float, slow_down_real_exec: float, rm_task_objects: bool, n_evals: int = None):
-
-    # set real execution or not
+def evaluate_on_task(config, eval_env, agent, task: str, real_exec: str, file_log: str, time_step: float,
+                     slow_down_real_exec: float, rm_task_objects: bool, n_evals: int = None):
     eval_env.env_method("set_real_execution", real_exec, time_step, slow_down_real_exec)
 
     task_eval_env = wrap_in_task(eval_env, task,
@@ -236,10 +231,6 @@ def evaluate_on_task(config, eval_env, agent, task: str, real_exec: str,
                                            eval_freq=config.evaluation_frequency,
                                            log_path=file_log,
                                            best_model_save_path=None,
-                                           early_stop_metric=config.early_stop_metric[0],
-                                           comparison=config.early_stop_metric[1],
-                                           early_stop_after_evals=config.early_stop_after_evals,
-                                           n_avg=config.early_stop_n_avg,
                                            debug=config.debug,
                                            prefix=prefix,
                                            verbose=2)
@@ -252,143 +243,21 @@ def evaluate_on_task(config, eval_env, agent, task: str, real_exec: str,
     task_eval_env.env_method("clear")
 
 
-def move_straight(env: ModulationEnv, agent=None, gripper_goal=None, action=None, start_pose_distribution="fixed", show_base=True, show_actual_gripper=True, show_planned_gripper=True):
-    """Helper for quick testing. If it actually moves straight depends on config.strategy"""
-    if agent is not None:
-        rospy.loginfo("Using agent actions")
-    elif action is None:
-        action = np.zeros(env.action_space.shape)
-        rospy.loginfo(f"Using action {action}")
-    if gripper_goal is None:
-        gripper_goal = (4, 0, 0.5, 0, 0, 0)
-
-    with torch.no_grad():
-        obs = env.reset(start_pose_distribution=start_pose_distribution, gripper_goal_distribution='rnd', success_thres_dist=0.025, success_thres_rot=0.05,
-                        gripper_goal=gripper_goal, gmm_model_path="")
-        # env.parse_obs(obs)
-
-        done_return, i, actions = 0, 0, []
-        while not done_return:
-            if agent is not None:
-                action = agent.predict(obs, deterministic=True)[0]
-            # pathPoint = env.visualize()
-            obs, reward, done_return, info = env.step(np.array(action))
-            env.parse_obs(obs)
-            actions.append(action)
-            i += 1
-            # if i > 1000:
-            #     break
-    pathPoint = env.visualize()
-
-    shw = False
-    if shw:
-        f = env.plot_pathPoints([pathPoint], show_base=show_base, show_actual_gripper=show_actual_gripper, show_planned_gripper=show_planned_gripper)
-        plt.show()
-        plt.close(f)
-
-        plt.plot(np.diff([p.base_x for p in pathPoint]), label='base_vel_x')
-        plt.plot(np.diff([p.gripper_x for p in pathPoint]), label='gripper_vel_x')
-        plt.plot(np.diff([p.planned_gripper_x for p in pathPoint]), label='planned_gripper_vel_x')
-        plt.plot([0.002 * p.ik_fail for p in pathPoint], label='ik_fail')
-        plt.legend(); plt.show(); plt.close();
-
-        # plt.plot(np.diff([p.gripper_z for p in pathPoint]), label='gripper_vel_z')
-        # plt.plot(np.diff([p.planned_gripper_z for p in pathPoint]), label='planned_gripper_vel_z')
-        # plt.plot([0.002 * p.ik_fail for p in pathPoint], label='ik_fail')
-        # plt.legend(); plt.show(); plt.close();
-        #
-        # plt.plot([p.gripper_z for p in pathPoint], label='gripper_z')
-        # plt.plot([p.planned_gripper_z for p in pathPoint], label='planned_gripper_z')
-        # plt.plot([0.002 * p.ik_fail for p in pathPoint], label='ik_fail')
-        # plt.legend(); plt.show(); plt.close();
-
-        plt.plot(np.diff([p.gripper_x for p in pathPoint]) - np.diff([p.base_x for p in pathPoint]), label='gripper diff(x) - base diff(x)')
-        plt.legend(); plt.show(); plt.close();
-
-        plt.plot([p.gripper_rel_x for p in pathPoint], label='gripper_rel_x')
-        plt.plot([p.gripper_rel_y for p in pathPoint], label='gripper_rel_y')
-        plt.plot([p.gripper_rel_z for p in pathPoint], label='gripper_rel_z')
-        plt.legend(); plt.show(); plt.close();
-
-        plt.plot([p.planned_base_x - p.base_x for p in pathPoint], label='base x: planned - current')
-        plt.plot([p.planned_gripper_x - p.gripper_x for p in pathPoint], label='gripper x: planned - current')
-        plt.plot([p.planned_gripper_y - p.gripper_y for p in pathPoint], label='gripper y: planned - current')
-        plt.plot([p.planned_gripper_z - p.gripper_z for p in pathPoint], label='gripper z: planned - current')
-        plt.plot([0.2 * p.ik_fail for p in pathPoint], label='ik_fail')
-        plt.legend(); plt.show(); plt.close();
-
-        dists = [calc_dist_to_sol(p) for p in pathPoint]
-        plt.plot(dists, label='dist from desired gripper')
-        plt.plot([0.2 * p.ik_fail for p in pathPoint], label='ik_fail')
-        plt.legend(); plt.show(); plt.close();
-
-        plt.plot([p.desired_base_x for p in pathPoint], label='base x: desired')
-        plt.plot([p.planned_base_x for p in pathPoint], label='base x: planned')
-        plt.plot([p.base_x for p in pathPoint], label='base x: achieved')
-        plt.plot([p.desired_base_x - p.base_x for p in pathPoint], label='base x: desired - achieved')
-        plt.legend(); plt.show(); plt.close();
-
-        plt.plot([p.desired_base_y for p in pathPoint], label='base y: desired')
-        plt.plot([p.planned_base_y for p in pathPoint], label='base y: planned')
-        plt.plot([p.base_y for p in pathPoint], label='base y: achieved')
-        plt.plot([p.desired_base_y - p.base_y for p in pathPoint], label='base y: desired - achieved')
-        plt.legend(); plt.show(); plt.close();
-
-        plt.plot([p.desired_base_rot for p in pathPoint], label='base rot: desired')
-        plt.plot([p.base_rot for p in pathPoint], label='base rot: achieved')
-        plt.plot([p.desired_base_rot - p.base_rot for p in pathPoint], label='base rot: desired - achieved')
-        plt.legend(); plt.show(); plt.close();
-
-        # plt.plot([p.torso_desired for p in pathPoint], label='torso: desired')
-        # plt.plot([p.torso_actual for p in pathPoint], label='torso: achieved')
-        # plt.plot([p.torso_desired - p.torso_actual for p in pathPoint], label='torso: desired - achieved')
-        # plt.legend(); plt.show(); plt.close();
-
-        plt.plot([p.base_cmd_angular_z for p in pathPoint], label='base cmd: angular z')
-        plt.plot([p.base_cmd_linear_x for p in pathPoint], label='base cmd: linear x')
-        plt.plot([p.base_cmd_linear_y for p in pathPoint], label='base cmd: linear y')
-        plt.plot([0.2 * p.ik_fail for p in pathPoint], label='ik_fail')
-        plt.legend(); plt.show(); plt.close();
-
-        plt.plot([p.collision for p in pathPoint], label='collisions')
-        plt.legend(); plt.show(); plt.close();
-
-        actions = np.array(actions)
-        for i, n in enumerate(env.action_names):
-            plt.plot(actions[:, i], label=n)
-        plt.title('actions'); plt.legend(); plt.show(); plt.close();
-
-    rospy.loginfo(f"N collisions detected: {sum([p.collision for p in pathPoint])}")
-    rospy.loginfo(f"length of the episode: {len(pathPoint)}")
-
-
 # @traced
 def main():
     # need a node to listen to some stuff for the task envs
     rospy.init_node('kinematic_feasibility_py', anonymous=False)
 
     main_path = Path(__file__).parent
-    run, config = setup_config(main_path,
-                               sync_tensorboard=True)
+    run, config = setup_config(main_path, sync_tensorboard=True)
 
     # USE SAME ENV FOR EVAL. OTHERWISE POTENTIAL NS CONFLICT WITH CONTROLLERS (PLUS NEED TO START ALL CONTROLLERS TWICE)
     env, eval_env = get_env(config, start_launchfiles=config.start_launchfiles_no_controllers, create_eval_env=False, task=config.task)
-    # if config.norm_obs:
-    #     norm_reward = False
-    #     env = VecNormalize(env, training=True, norm_obs=True, norm_reward=norm_reward, clip_obs=10., clip_reward=10.)
-    #     if eval_env is not None:
-    #         eval_env = VecNormalize(eval_env, training=False, norm_obs=True, norm_reward=norm_reward, clip_obs=10., clip_reward=10.)
 
     tensorboard_log = f'{config.logpath}/stableBL/'
     file_log = f'{config.logpath}/mytmp/'
     agent = construct_agent(config, env, tensorboard_log,
                             restore_model_path=config.model_file if config.restore_model else None)
-
-    if config.debug and not config.evaluation_only:
-        move_straight(env.envs[0].env, start_pose_distribution="fixed", agent=agent,
-                      show_base=True, show_actual_gripper=True, show_planned_gripper=True)
-        evaluate_on_task(config, eval_env, agent=agent, task=config.task, real_exec=config.real_execution,
-                         file_log=file_log, time_step=config.time_step, rm_task_objects=False, slow_down_real_exec=config.slow_down_real_exec)
 
     # train
     if not config.evaluation_only:
@@ -420,6 +289,7 @@ def main():
                         sync_all(file_log, sync_model=False)
 
     rospy.signal_shutdown("We are done")
+
 
 if __name__ == '__main__':
     main()

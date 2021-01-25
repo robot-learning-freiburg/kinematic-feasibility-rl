@@ -1,6 +1,6 @@
-import time
 import argparse
-from subprocess import Popen, PIPE
+import time
+from subprocess import Popen
 
 """
 IMPORTANT: ENSURE THAT THIS FILE ONLY RELIES ON PYTHON2 COMPATIBLE SYNTAX
@@ -16,7 +16,6 @@ moveit_cmds = {
     'tiago': None,  # ['roslaunch', 'tiago_moveit_config', 'move_group.launch'],
     'hsr': "roslaunch modulation_rl hsr_move_group.launch joint_states_topic:=/hsrb/robot_state/joint_states".split(" ")
 }
-
 
 
 def start_launch_files(env_name, use_task_world=False):
@@ -46,6 +45,7 @@ def stop_launch_files(p_gazebo, p_moveit):
         p_gazebo.terminate()
     if p_moveit:
         p_moveit.terminate()
+
 
 # def roskill():
 #     cmd = 'rosnode kill -a; killall -9 gzserver gzclient'

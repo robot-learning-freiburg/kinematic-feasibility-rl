@@ -1,27 +1,16 @@
 #include <modulation_rl/base_gripper_planner.h>
 
+BaseGripperPlanner::BaseGripperPlanner(){};
 
-BaseGripperPlanner::BaseGripperPlanner(
-        double min_planner_velocity,
-        double max_planner_velocity,
-        bool use_base_goal
-    ) : min_planner_velocity_ { min_planner_velocity },
-        max_planner_velocity_ { max_planner_velocity },
-        use_base_goal_ { use_base_goal }
-    {  };
-
-
-PlannedVelocities BaseGripperPlanner::transformToVelocity(
-        tf::Transform current,
-        tf::Transform next,
-        tf::Transform baseTransform,
-        double upper_vel_limit
-    ){
+PlannedVelocities BaseGripperPlanner::transformToVelocity(tf::Transform current,
+                                                          tf::Transform next,
+                                                          tf::Transform baseTransform,
+                                                          double upper_vel_limit){
     PlannedVelocities planned_vel;
 
     planned_vel.vel_world = next.getOrigin() - current.getOrigin();
 
-    if (upper_vel_limit != 0.0){
+    if (upper_vel_limit != 0.0) {
         // planned_vel.vel_world = utils::min_max_scale_vel(planned_vel.vel_world, 0.0, upper_vel_limit);
         planned_vel.vel_world = utils::norm_scale_vel(planned_vel.vel_world, 0.0, upper_vel_limit);
         // planned_vel.vel_world = utils::max_clip_vel(planned_vel.vel_world, upper_vel_limit);

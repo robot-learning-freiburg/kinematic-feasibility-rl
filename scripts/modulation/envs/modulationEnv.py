@@ -2,59 +2,28 @@ import os
 from collections import deque
 
 import numpy as np
-from gym import spaces, Env
 import torch
+from gym import spaces, Env
 
-# from .utils import source_bash_file
-# source_bash_file(os.path.expanduser('~') + '/.bashrc')
-# source_bash_file(os.path.expanduser('~') + '/ros/catkin_ws_modulation_rl/devel/setup.bash')
-# source_bash_file(os.path.expanduser('~') + '/ros/catkin_ws_modulation_rl/devel/setup.sh')
 from dynamic_system_py import PR2Env, TiagoEnv #, HSREnv
 
 
 class ActionRanges:
-    # ranges = {
-    #     'base_rot': [-0.2, 0.2],
-    #     'modulate_alpha_x': [-1.0, 1.0],
-    #     'modulate_alpha_y': [-1.0, 1.0],
-    #     'modulate_alpha_dir': [-np.pi/2, np.pi/2],
-    #     'modulation_lambda1': [-2.0, 2.0],
-    #     'pause_gripper': [0, 1],
-    #     'base_x': [-0.02, 0.02],
-    #     'base_y': [-0.02, 0.02],
-    #     'tiago_base_vel': [-0.02, 0.02],
-    #     'tiago_base_angle': [-0.04, 0.04],
-    #     'gripper_x': [-0.01, 0.01],
-    #     'gripper_y': [-0.01, 0.01],
-    #     'gripper_z': [-0.01, 0.01],
-    #     'gripper_dq_x': [-1.0, 1.0],
-    #     'gripper_dq_y': [-1.0, 1.0],
-    #     'gripper_dq_z': [-1.0, 1.0],
-    #     'gripper_dq_w': [-1.0, 1.0],
-    # }
-
     @classmethod
-    def get_ranges(cls, env_name: str, strategy: str, pause_gripper: bool, arctan2_alpha: bool):
+    def get_ranges(cls, env_name: str, strategy: str):
         ks = []
-        if pause_gripper:
-            ks.append('pause_gripper')
-
-        if strategy == 'modulate':
-            ks += ['base_rot', 'modulation_lambda1']
-            ks += ['modulate_alpha_x', 'modulate_alpha_y'] if arctan2_alpha else ['modulate_alpha_dir']
-        elif strategy in ['dirvel', 'relvelm', 'relveld', 'unmodulated']:
+        if strategy in ['dirvel', 'relvelm', 'relveld', 'unmodulated']:
             if env_name == 'tiago':
                 ks += ['tiago_base_vel', 'tiago_base_angle']
             else:
                 ks += ['base_rot', 'base_x', 'base_y']
 
         n = len(ks)
-        # min_actions = [cls.ranges[k][0] for k in ks]
-        # max_actions = [cls.ranges[k][1] for k in ks]
         min_actions = n * [-1]
         max_actions = n * [1]
 
-        return ks, min_actions, max_actions
+        return ks, np.array(min_actions), np.array(max_actions)
+
 
 # https://www1.icsi.berkeley.edu/~stellayu/publication/doc/2019driveCVPRW.pdf
 # https://github.com/utiasSTARS/bingham-rotation-learning
@@ -77,6 +46,7 @@ def convert_Avec_to_A(A_vec):
     A[:, idx[1], idx[0]] = A_vec
     return A.squeeze()
 
+
 def A_vec_to_quat(A_vec):
     A = convert_Avec_to_A(A_vec)
     if A.dim() < 3:
@@ -88,13 +58,6 @@ def A_vec_to_quat(A_vec):
 class ModulationEnv(Env):
     """
     Environment for modulating the base of a mobile manipulator robot.
-
-    Action space:
-    - alpha_x    Direction of the norm vector in which to apply the velocity. Direction is set as arctan2(alpha_x, alpha_y)
-    - alpha_y
-    - lambda1    Velocity in direction of the norm vector. E.g. 1: no modulation, 2: double the velocity, -1: same speed in reverse direction
-    - lambda2    Velocity orthogonal to norm vector. Not required if direction of the vector can be set. Input ignored and always set to 1 within the c++ code
-    - lambda3    Angular velocity for the base
     """
     DoneReturnCode = {0: 'Ongoing',
                       1: 'Success: goal reached',
@@ -109,14 +72,10 @@ class ModulationEnv(Env):
                  penalty_scaling: float,
                  time_step: float,
                  slow_down_real_exec: float,
-                 arctan2_alpha,
-                 alpha_direct_rng,
                  seed: int,
-                 use_base_goal: bool,
                  strategy: str,
                  real_execution: str,
                  init_controllers: bool,
-                 pause_gripper_action: bool,
                  vis_env: bool,
                  transition_noise_ee: float,
                  transition_noise_base: float,
@@ -125,7 +84,7 @@ class ModulationEnv(Env):
                  max_goal_dist: float = 5,
                  stack_k_obs: int = 1,
                  perform_collision_check: bool = False,
-                 hsr_ik_slack_dist = None,
+                 hsr_ik_slack_dist=None,
                  hsr_ik_slack_rot_dist: float = None,
                  hsr_sol_dist_reward: bool = None):
         """
@@ -134,8 +93,6 @@ class ModulationEnv(Env):
             ik_fail_thresh: number of kinetic failures after which to abort the episode
             ik_fail_thresh_eval: number of kinetic failures after which to abort the episode during evaluation (allows to compare across different ik_fail_thresh)
             penalty_scaling: how much to weight the penalty for large action modulations in the reward
-            arctan2_alpha: whether to construct modulation_aplha as actan2 or directly learn it (in which case actions[1] will be ignored).
-                Setting to false requires to also change the bounds for this action
             min_actions: lower bound constraints for actions
             max_actions: upper bound constraints for actions
         """
@@ -143,7 +100,6 @@ class ModulationEnv(Env):
         args = [seed,
                 min_goal_dist,
                 max_goal_dist,
-                use_base_goal,
                 strategy,
                 real_execution,
                 init_controllers,
@@ -164,12 +120,10 @@ class ModulationEnv(Env):
         self.state_dim = self._env.get_obs_dim()
         print(f"Detected state dim: {self.state_dim}")
 
-        ks, min_actions, max_actions = ActionRanges.get_ranges(env_name=env, strategy=strategy, pause_gripper=pause_gripper_action, arctan2_alpha=arctan2_alpha)
-        print(f"Actions to learn: {ks}")
-        self.action_dim = len(min_actions)
-        self._min_actions = np.array(min_actions)
-        self._max_actions = np.array(max_actions)
-        self.action_names = ks
+        self.action_names, self._min_actions, self._max_actions = ActionRanges.get_ranges(env_name=env,
+                                                                                          strategy=strategy)
+        print(f"Actions to learn: {self.action_names}")
+        self.action_dim = len(self._min_actions)
 
         # TODO: DEFINE OBS BOUNDS
         self.observation_space = spaces.Box(low=-100, high=100, shape=[stack_k_obs * self.state_dim])
@@ -177,16 +131,12 @@ class ModulationEnv(Env):
         # and just expects actions in the range [-1, 1] from the agent
         self.action_space = spaces.Box(low=np.array(self.action_dim * [-1.0]),
                                        high=np.array(self.action_dim * [1.0]),
-                                       shape=[len(min_actions)])
+                                       shape=[self.action_dim])
 
         self._ik_fail_thresh = ik_fail_thresh
         self._ik_fail_thresh_eval = ik_fail_thresh_eval
-        self._arctan2_alpha = arctan2_alpha
-        self._alpha_direct_rng = alpha_direct_rng
         self._last_k_obs = deque(stack_k_obs * [np.zeros(self.state_dim)], maxlen=stack_k_obs)
-        self._pause_gripper_action = pause_gripper_action
         self._strategy = strategy
-        self._use_base_goal = use_base_goal
         self._env_name = env
         self._vis_env = vis_env
         self._transition_noise_ee = transition_noise_ee
@@ -221,26 +171,13 @@ class ModulationEnv(Env):
         return low + (0.5 * (scaled_action + 1.0) * (high - low))
 
     def _convert_policy_to_env_actions(self, actions):
-        # NOTE: ALL ACTION RANGES ARE [-1, 1] (ONLY modulation_alpha WE ADJUST WITHIN THIS FUNCTION). SO REGULARISE ACTIONS SIMILARLY WE CAN JUST SCARE EVERYTHIN
+        # NOTE: ALL ACTION RANGES ARE [-1, 1]. SO REGULARISE ACTIONS SIMILARLY WE CAN JUST SCARE EVERYTHIN
         # COULD PROBABLY REMOVE THE self.unscale_action(actions) CALL
         # stretch and translate actions from [-1, 1] range into target range
         actions = list(self.unscale_action(actions))
 
-        if self._pause_gripper_action:
-            # action is in range [-1, 1]
-            pause_gripper = actions.pop(0) > 0.0
-        else:
-            pause_gripper = False
-
         # base actions
-        if self._strategy == 'modulate':
-            base_rot, lambda1 = actions.pop(0), actions.pop(0)
-            if self._arctan2_alpha:
-                modulation_alpha = np.arctan2(actions.pop(0), actions.pop(0))
-            else:
-                modulation_alpha = self._alpha_direct_rng * actions.pop(0)
-            base_actions = [base_rot, lambda1, modulation_alpha]
-        elif self._strategy in ['relvelm', 'relveld', 'dirvel', 'unmodulated']:
+        if self._strategy in ['relvelm', 'relveld', 'dirvel', 'unmodulated']:
             if self._env_name == 'tiago':
                 vel, angle = actions.pop(0), actions.pop(0)
                 base_actions = [vel, angle]
@@ -254,7 +191,7 @@ class ModulationEnv(Env):
 
         assert len(actions) == 0, "Not all actions consumed"
 
-        return pause_gripper, base_actions
+        return base_actions
 
     # needed for stable_baselines replay buffer class
     def normalize_reward(self, reward):
@@ -275,7 +212,7 @@ class ModulationEnv(Env):
               gripper_goal: list = None,
               base_start: list = None,
               close_gripper: bool = False,
-              gmm_model_path: str = ""
+              gmm_model_path: str = "",
               ):
         assert start_pose_distribution in ["fixed", "restricted_ws", "rnd"], start_pose_distribution
         assert (gripper_goal is not None) or (gripper_goal_distribution in ["fixed", "restricted_ws", "rnd"]), gripper_goal_distribution
@@ -302,14 +239,14 @@ class ModulationEnv(Env):
                 while True:
                     user_input = input(f"Press y to accept or enter a new goal as [x y z R P Y] in world coordinates:\n")
                     if user_input == 'y':
-                        continue
+                        break
                     else:
                         user_goal = [float(g) for g in user_input.split(" ")]
                         if len(user_goal) == 6:
                             gripper_goal = user_goal
                             self.add_goal_marker(gripper_goal, 99999, "pink")
                             print(f"New specified gripper goal: {gripper_goal}")
-                            continue
+                            break
                         else:
                             f"Goal needs to have 6 values separated by white space. Received {gripper_goal}"
 
@@ -330,15 +267,6 @@ class ModulationEnv(Env):
 
         return self._stack_obs(self._last_k_obs)
 
-    def visualize(self, logdir: str = "", logfile: str = "") -> list:
-        if logfile:
-            os.makedirs(logdir, exist_ok=True)
-            path = f'{logdir}/{logfile}'
-        else:
-            path = ""
-        path_points = self._env.visualize(path)
-        return path_points
-
     def step(self, action, eval=False):
         """
         Take a step in the environment.
@@ -352,26 +280,31 @@ class ModulationEnv(Env):
             done_return (int): whether the episode terminated, see cls.DoneReturnCode
             nr_kin_failure (int): cumulative number of kinetic failures in this episode
         """
-        thres = self._ik_fail_thresh_eval if eval else self._ik_fail_thresh
-
-        pause_gripper, base_actions = self._convert_policy_to_env_actions(action)
-
         if eval:
-            transition_noise_ee, transition_noise_base = 0, 0
+            transition_noise_ee, transition_noise_base, thres = 0, 0, self._ik_fail_thresh_eval
         else:
-            transition_noise_ee, transition_noise_base = self._transition_noise_ee, self._transition_noise_base
+            transition_noise_ee, transition_noise_base, thres = self._transition_noise_ee, self._transition_noise_base, self._ik_fail_thresh
 
-        retval = self._env.step(thres, pause_gripper, base_actions, transition_noise_ee, transition_noise_base)
+        base_actions = self._convert_policy_to_env_actions(action)
+        retval = self._env.step(thres, base_actions, transition_noise_ee, transition_noise_base)
         obs, reward, done_return, nr_kin_failures = self._parse_env_output(retval)
 
         # use unnormalised obs to have them for the replay buffer (see last_orig_obs())
         self._last_k_obs.appendleft(obs)
-
         stacked_obs = self._stack_obs(self._last_k_obs)
 
         info = {'nr_kin_failures': nr_kin_failures}
 
         return stacked_obs, reward, done_return, info
+
+    def visualize(self, logdir: str = "", logfile: str = "") -> list:
+        if logfile:
+            os.makedirs(logdir, exist_ok=True)
+            path = f'{logdir}/{logfile}'
+        else:
+            path = ""
+        path_points = self._env.visualize(path)
+        return path_points
 
     def parse_done_return(self, code):
         """
@@ -393,7 +326,7 @@ class ModulationEnv(Env):
         """Return rotational distance from current gripper position to gripper goal"""
         return self._env.get_rot_dist_to_goal()
 
-    def set_gripper_goal(self, goal: list, gripper_goal_distribution: str, gmm_model_path: str, success_thres_dist: float, success_thres_rot: float):
+    def set_gripper_goal(self, goal: list, gripper_goal_distribution: str, gmm_model_path: str, success_thres_dist: float, success_thres_rot: float, start_pause: float = None):
         """
         goal: [x, y, z, r, p, y] in world coordinates
         """
@@ -402,37 +335,40 @@ class ModulationEnv(Env):
         if goal:
             assert gripper_goal_distribution is None
             gripper_goal_distribution = ""
-        orig_obs = self._env.set_gripper_goal(goal, gripper_goal_distribution, gmm_model_path, success_thres_dist, success_thres_rot)
+        if start_pause is None:
+            start_pause = self._start_pause
+
+        orig_obs = self._env.set_gripper_goal(goal, gripper_goal_distribution, gmm_model_path, waypoints, success_thres_dist, success_thres_rot, start_pause)
         for _ in range(len(self._last_k_obs) - 1):
             self._last_k_obs.appendleft(np.zeros(self.state_dim))
         self._last_k_obs.appendleft(orig_obs)
 
         return self._stack_obs(self._last_k_obs)
 
-    def open_gripper(self, position: float = 0.08):
+    def open_gripper(self, position: float = 0.08, wait_for_result: bool = True):
         if self.get_real_execution() == "sim":
             return True
         else:
-            return self._env.open_gripper(position)
+            return self._env.open_gripper(position, wait_for_result)
 
-    def close_gripper(self, position: float = 0.00):
+    def close_gripper(self, position: float = 0.00, wait_for_result: bool = True):
         if self.get_real_execution() == "sim":
             return True
         else:
-            return self._env.close_gripper(position)
+            return self._env.close_gripper(position, wait_for_result)
 
     @staticmethod
     def parse_obs(obs, precision=2, floatmode='fixed') -> dict:
-        names = ["rel_gripper_pose_", 7, "planned_gripper_vel_rel_", 3, "planned_gripper_dq_", 4, "rel_gripper_goal", 7, "paused_count_", 1, "current_joint_values", -1]
+        names = ["rel_gripper_pose_", 7, "planned_gripper_vel_rel_", 3, "planned_gripper_dq_", 4, "rel_gripper_goal", 7, "current_joint_values", -1]
         cum = 0
         parsed = dict()
         for i in range(len(names) // 2):
-            n = names[(2*i) + 1]
+            n = names[(2 * i) + 1]
             if n != -1:
-                values = np.array(obs)[cum:cum+n]
+                values = np.array(obs)[cum:cum + n]
             else:
                 values = np.array(obs)[cum:]
-            print(f"{names[2*i]}: {np.array2string(values, precision=precision, floatmode=floatmode)}")
+            print(f"{names[2 * i]}: {np.array2string(values, precision=precision, floatmode=floatmode)}")
             parsed[n] = values
             cum += n
         return parsed

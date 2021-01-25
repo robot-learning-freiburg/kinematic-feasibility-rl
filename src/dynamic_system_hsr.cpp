@@ -1,86 +1,78 @@
 #include <modulation_rl/dynamic_system_hsr.h>
-using tmc_manipulation_types::JointState;
-using Eigen::VectorXd;
-using Eigen::Vector3d;
 using Eigen::Affine3d;
 using Eigen::AngleAxisd;
 using Eigen::Translation3d;
-using std::vector;
+using Eigen::Vector3d;
+using Eigen::VectorXd;
 using std::string;
-using tmc_robot_kinematics_model::IKSolver;
+using std::vector;
+using tmc_manipulation_types::JointState;
 using tmc_robot_kinematics_model::IKRequest;
+using tmc_robot_kinematics_model::IKSolver;
 using tmc_robot_kinematics_model::IRobotKinematicsModel;
-using tmc_robot_kinematics_model::Tarp3Wrapper;
 using tmc_robot_kinematics_model::NumericIKSolver;
+using tmc_robot_kinematics_model::Tarp3Wrapper;
 
 namespace {
-const uint32_t kMaxItr = 10000;
-const double kEpsilon = 0.0001;
-const double kConvergeThreshold = 1e-6;
-const char* const kModelPath = "/opt/ros/melodic/share/hsrb_description/robots/hsrb4s.urdf";
-}
+    const uint32_t kMaxItr = 10000;
+    const double kEpsilon = 0.0001;
+    const double kConvergeThreshold = 1e-6;
+    const char *const kModelPath = "/opt/ros/melodic/share/hsrb_description/robots/hsrb4s.urdf";
+}  // namespace
 
+const RoboConf hsr_config{.name = "hsrb",
+                          .joint_model_group_name = "arm",
+                          .frame_id = "odom",
+                          .global_link_transform = "hand_palm_link",
+                          .scene_collision_group_name = "",
+                          // set offset to zero to account for less precise final position we're asking for
+                          // tf::Vector3(0.075, 0.0, 0.0),
+                          .tip_to_gripper_offset = tf::Vector3(0.08, 0.0, 0.0),
+                          .gripper_to_base_rot_offset = tf::Quaternion(0.707, 0.000, 0.707, -0.000),
+                          // from src/hsrb_moveit/hsrb_moveit_config/config/hsrb.srdf
+                          .neutral_pos_joint_names = {"arm_lift_joint", "arm_flex_joint", "arm_roll_joint", "wrist_flex_joint", "wrist_roll_joint"},
+                          .neutral_pos_values = {0.2, -0.7, 0.0, -1.2, 0.0},
+                          // not double checked yet
+                          .base_cmd_topic = "/hsrb/command_velocity",
+                          .base_vel_rng = 0.2,
+                          .base_rot_rng = 1.5,
+                          .z_min = 0.2,
+                          .z_max = 1.4,
+                          .restricted_ws_z_min = 0.4,
+                          .restricted_ws_z_max = 1.1,
+                          .gmm_base_offset = 0.25};
 
-const RoboConf hsr_config{
-    .name = "hsrb",
-    .joint_model_group_name = "arm",
-    .frame_id = "odom",
-    .global_link_transform = "hand_palm_link",
-    .scene_collision_group_name = "",
-    // set offset to zero to account for less precise final position we're asking for
-    // tf::Vector3(0.075, 0.0, 0.0),
-    .tip_to_gripper_offset = tf::Vector3(0.08, 0.0, 0.0),
-    .gripper_to_base_rot_offset = tf::Quaternion(0.707, 0.000, 0.707, -0.000),
-    // from src/hsrb_moveit/hsrb_moveit_config/config/hsrb.srdf
-    .neutral_pos_joint_names = {"arm_lift_joint", "arm_flex_joint", "arm_roll_joint", "wrist_flex_joint", "wrist_roll_joint"},
-    .neutral_pos_values = {0.2, -0.7, 0.0, -1.2, 0.0},
-    // not double checked yet
-    .eef_joint_names = {"arm_lift_joint", "arm_flex_joint", "arm_roll_joint", "wrist_flex_joint", "wrist_roll_joint", "wrist_ft_sensor_frame_joint"},
-    .base_vel_rng = 0.2,
-    .base_rot_rng = 1.5,
-    .z_min = 0.2,
-    .z_max = 1.4,
-    .restricted_ws_z_min = 0.4,
-    .restricted_ws_z_max = 1.1,
-    .gmm_base_offset = 0.25
-};
-
-DynamicSystemHSR::DynamicSystemHSR(
-    uint32_t seed,
-    double min_goal_dist,
-    double max_goal_dist,
-    bool use_base_goal,
-    std::string strategy,
-    std::string real_execution,
-    bool init_controllers,
-    double penalty_scaling,
-    double time_step,
-    double slow_down_real_exec,
-    bool perform_collision_check,
-    double ik_slack_dist,
-    double ik_slack_rot_dist,
-    bool sol_dist_reward
-    ) : DynamicSystem_base(
-        seed,
-        min_goal_dist,
-        max_goal_dist,
-        use_base_goal,
-        strategy,
-        real_execution,
-        init_controllers,
-        penalty_scaling,
-        time_step,
-        slow_down_real_exec,
-        perform_collision_check,
-        hsr_config),
-        ik_slack_dist_ { ik_slack_dist },
-        ik_slack_rot_dist_ { ik_slack_rot_dist },
-        sol_dist_reward_ { sol_dist_reward }
-{
+DynamicSystemHSR::DynamicSystemHSR(uint32_t seed,
+                                   double min_goal_dist,
+                                   double max_goal_dist,
+                                   std::string strategy,
+                                   std::string real_execution,
+                                   bool init_controllers,
+                                   double penalty_scaling,
+                                   double time_step,
+                                   double slow_down_real_exec,
+                                   bool perform_collision_check,
+                                   double ik_slack_dist,
+                                   double ik_slack_rot_dist,
+                                   bool sol_dist_reward) :
+    DynamicSystem_base(seed,
+                       min_goal_dist,
+                       max_goal_dist,
+                       strategy,
+                       real_execution,
+                       init_controllers,
+                       penalty_scaling,
+                       time_step,
+                       slow_down_real_exec,
+                       perform_collision_check,
+                       hsr_config),
+    ik_slack_dist_{ik_slack_dist},
+    ik_slack_rot_dist_{ik_slack_rot_dist},
+    sol_dist_reward_{sol_dist_reward} {
     setup();
 }
 
-void DynamicSystemHSR::setup(){
+void DynamicSystemHSR::setup() {
     // analytic solver don't need robot model.
     IRobotKinematicsModel::Ptr robot;
 
@@ -97,12 +89,11 @@ void DynamicSystemHSR::setup(){
 
     robot.reset(new Tarp3Wrapper(xml_string));
     // https://git.hsr.io/koji_terada/example_hsr_ik/-/blob/master/src/example_numeric_ik.cpp
-    numeric_solver_.reset(new NumericIKSolver(
-                       IKSolver::Ptr(),
-                       robot,
-                       10000,//::kMaxItr,
-                       0.001,//::kEpsilon,
-                       1e-6));//::kConvergeThreshold));
+    numeric_solver_.reset(new NumericIKSolver(IKSolver::Ptr(),
+                                              robot,
+                                              10000,   //::kMaxItr,
+                                              0.001,   //::kEpsilon,
+                                              1e-6));  //::kConvergeThreshold));
 
     // ik joints. analytic ik have to use these joint.
     ik_joint_names_.push_back("arm_lift_joint");
@@ -112,16 +103,13 @@ void DynamicSystemHSR::setup(){
     ik_joint_names_.push_back("wrist_roll_joint");
     ik_joint_names_.push_back("wrist_ft_sensor_frame_joint");
 
-
-    if (init_controllers_){
+    if (init_controllers_) {
         std::vector<string> controllers_to_await;
-
-        cmd_base_vel_pub_ = nh_->advertise<geometry_msgs::Twist>("/hsrb/command_velocity", 1);
 
         arm_client_ = new TrajClientHSR("/hsrb/arm_trajectory_controller/follow_joint_trajectory", true);
         controllers_to_await.push_back("arm_trajectory_controller");
 
-        while(!arm_client_->waitForServer(ros::Duration(5.0))){
+        while (!arm_client_->waitForServer(ros::Duration(5.0))) {
             ROS_INFO("Waiting for the /hsrb/arm_trajectory_controller/follow_joint_trajectory action server to come up");
         }
 
@@ -137,22 +125,21 @@ void DynamicSystemHSR::setup(){
         arm_goal_.trajectory.points[0].positions.resize(joint_names_.size() - 1);
         arm_goal_.trajectory.points[0].velocities.resize(joint_names_.size() - 1);
 
-
         // make sure the controller is running
         ros::ServiceClient controller_manager_client = nh_->serviceClient<controller_manager_msgs::ListControllers>("/hsrb/controller_manager/list_controllers");
         controller_manager_msgs::ListControllers list_controllers;
 
-        while(!controller_manager_client.call(list_controllers)){
+        while (!controller_manager_client.call(list_controllers)) {
             ROS_INFO("Waiting for /hsrb/controller_manager/list_controllers");
             ros::Duration(0.5).sleep();
         }
 
         std::string cname;
-        for (int j=0; j<controllers_to_await.size();j++){
+        for (int j = 0; j < controllers_to_await.size(); j++) {
             cname = controllers_to_await.back();
             controllers_to_await.pop_back();
             bool running = false;
-            while (!running){
+            while (!running) {
                 ROS_INFO_STREAM("Waiting for /hsrb/" << cname);
                 ros::Duration(0.5).sleep();
                 if (controller_manager_client.call(list_controllers)) {
@@ -169,12 +156,12 @@ void DynamicSystemHSR::setup(){
     }
 }
 
-void DynamicSystemHSR::set_ik_slack(double ik_slack_dist, double ik_slack_rot_dist){
+void DynamicSystemHSR::set_ik_slack(double ik_slack_dist, double ik_slack_rot_dist) {
     ik_slack_dist_ = ik_slack_dist;
     ik_slack_rot_dist_ = ik_slack_rot_dist;
 }
 
-bool DynamicSystemHSR::find_ik(const Eigen::Isometry3d &desiredState, const tf::Transform &desiredGripperTfWorld){
+bool DynamicSystemHSR::find_ik(const Eigen::Isometry3d &desiredState, const tf::Transform &desiredGripperTfWorld) {
     // *** make request for IK ***
     // useing base DOF as planar movement. analytic IK have to use kPlanar.
     IKRequest req(tmc_manipulation_types::kNone);
@@ -208,13 +195,13 @@ bool DynamicSystemHSR::find_ik(const Eigen::Isometry3d &desiredState, const tf::
     // Solve.
     result = numeric_solver_->Solve(req,
                                     solution,
-                                    //origin_to_base_solution,
+                                    // origin_to_base_solution,
                                     origin_to_hand_result);
 
     kinematic_state_->setJointGroupPositions(joint_model_group_, solution.position);
 
     // Due to limit arm capabilities for most poses it will not be possible to find exact solution. Therefore allow a bit variance
-    const Eigen::Affine3d& solution_state = kinematic_state_->getGlobalLinkTransform(robo_config_.global_link_transform);
+    const Eigen::Affine3d &solution_state = kinematic_state_->getGlobalLinkTransform(robo_config_.global_link_transform);
     tf::Transform solution_state_tf, desiredState_tf;
     tf::transformEigenToTF(solution_state, solution_state_tf);
     tf::transformEigenToTF(desiredState, desiredState_tf);
@@ -223,14 +210,14 @@ bool DynamicSystemHSR::find_ik(const Eigen::Isometry3d &desiredState, const tf::
     rot_dist_solution_desired_ = utils::calc_rot_dist(solution_state_tf, desiredState_tf);
     // std::cout << "success: " << (result == tmc_robot_kinematics_model::kSuccess) << ", dist_solution_desired_: " << dist_solution_desired_ << ", rot_dist_solution_desired_: " << rot_dist_solution_desired_ << std::endl;
 
-    if (ik_slack_dist_ == 0.0){
+    if (ik_slack_dist_ == 0.0) {
         return result == tmc_robot_kinematics_model::kSuccess;
     } else {
         // Due to the kinematics an exact solution is not possible in most situations
         // make slightly stricter than success_thres_dist_ as numeric error might cause it to fail to terminate if it finishes with an error margin of success_thres_dist_
         // NOTE: RISK OF GETTING STUCK IF success_thres_dist_ < ik_slack_dist_!
         double dist_desired_goal = (desiredGripperTfWorld.getOrigin() - currentGripperGOAL_.getOrigin()).length();
-        if ((success_thres_dist_ < ik_slack_dist_) && (dist_desired_goal < 0.01)){
+        if ((success_thres_dist_ < ik_slack_dist_) && (dist_desired_goal < 0.01)) {
             // enforce to achieve the final goal irrespective of the slack we give it
             return (dist_solution_desired_ < success_thres_dist_ && rot_dist_solution_desired_ < success_thres_rot_);
         } else {
@@ -239,16 +226,11 @@ bool DynamicSystemHSR::find_ik(const Eigen::Isometry3d &desiredState, const tf::
     }
 }
 
-
-double DynamicSystemHSR::calc_reward(
-    bool found_ik,
-    bool pause_gripper,
-    double regularization)
-    {
+double DynamicSystemHSR::calc_reward(bool found_ik, double regularization) {
     // a)
-    double reward = DynamicSystem_base::calc_reward(found_ik, pause_gripper, regularization);
+    double reward = DynamicSystem_base::calc_reward(found_ik, regularization);
 
-    if (sol_dist_reward_ && found_ik){
+    if (sol_dist_reward_ && found_ik) {
         // scale to be a max of penalty_scaling_ * (-0.5 - 0.5)
         double dist_penalty = 0.5 * pow(dist_solution_desired_, 2) / pow(ik_slack_dist_, 2) + 0.5 * pow(rot_dist_solution_desired_, 2) / pow(ik_slack_rot_dist_, 2);
         reward -= dist_penalty;
@@ -257,13 +239,12 @@ double DynamicSystemHSR::calc_reward(
     return reward;
 }
 
-
-void DynamicSystemHSR::send_arm_command(const std::vector<double> &target_joint_values, double exec_duration){
+void DynamicSystemHSR::send_arm_command(const std::vector<double> &target_joint_values, double exec_duration) {
     int j = 0;
-    for (int i=0; i<joint_names_.size();i++){
+    for (int i = 0; i < joint_names_.size(); i++) {
         // std::cout << joint_names_[i] << ": " << target_joint_values[i] << std::endl;
         // part of the movit controller definition, but not part of /opt/ros/melodic/share/hsrb_common_config/params/hsrb_controller_config.yaml
-        if (joint_names_[i] != "wrist_ft_sensor_frame_joint"){
+        if (joint_names_[i] != "wrist_ft_sensor_frame_joint") {
             arm_goal_.trajectory.joint_names[j] = joint_names_[i];
             arm_goal_.trajectory.points[0].positions[j] = target_joint_values[i];
             arm_goal_.trajectory.points[0].velocities[j] = 0.0;
@@ -280,9 +261,9 @@ void DynamicSystemHSR::send_arm_command(const std::vector<double> &target_joint_
     arm_client_->sendGoal(arm_goal_);
 }
 
-bool DynamicSystemHSR::get_arm_success(){
+bool DynamicSystemHSR::get_arm_success() {
     arm_client_->waitForResult(ros::Duration(10.0));
-    if(arm_client_->getState() != actionlib::SimpleClientGoalState::SUCCEEDED){
+    if (arm_client_->getState() != actionlib::SimpleClientGoalState::SUCCEEDED) {
         ROS_WARN("The arm_client_ failed.");
         // throw std::runtime_error("The arm_client_ failed.");
         return false;
@@ -291,7 +272,7 @@ bool DynamicSystemHSR::get_arm_success(){
     }
 }
 
-void DynamicSystemHSR::open_gripper(double position){
+void DynamicSystemHSR::open_gripper(double position, bool wait_for_result) {
     // hsr takes 1.0 as completely open -> calculate proportional to an assumed max. opening of 0.1m
     position = std::min(position / 0.1, 1.0);
 
@@ -310,14 +291,16 @@ void DynamicSystemHSR::open_gripper(double position){
 
     // send message to the action server
     gripper_client_->sendGoal(goal);
-    gripper_client_->waitForResult(ros::Duration(5.0));
 
-    if(gripper_client_->getState() != actionlib::SimpleClientGoalState::SUCCEEDED)
-        ROS_WARN("The gripper controller failed.");
-    add_trajectory_point(true, true);
+    if (wait_for_result) {
+        gripper_client_->waitForResult(ros::Duration(5.0));
+
+        if (gripper_client_->getState() != actionlib::SimpleClientGoalState::SUCCEEDED)
+            ROS_WARN("The gripper controller failed.");
+    }
 }
 
-void DynamicSystemHSR::close_gripper(double position){
+void DynamicSystemHSR::close_gripper(double position, bool wait_for_result) {
     // 0.0 is not completely closed, but rather both 'forks' pointing straight ahead. -0.02 is roughly fully closed
-    open_gripper(position - 0.02);
+    open_gripper(position - 0.02, wait_for_result);
 }

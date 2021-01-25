@@ -1,9 +1,10 @@
-from collections import namedtuple
 import time
+from collections import namedtuple
 
 import rospy
-from gazebo_msgs.msg import ModelState, LinkStates, LinkState
-from gazebo_msgs.srv import DeleteModel, SpawnModel, GetModelState, SetModelState, SetModelConfiguration, SetModelConfigurationRequest, SetLinkState
+from gazebo_msgs.msg import ModelState, LinkStates
+from gazebo_msgs.srv import DeleteModel, SpawnModel, GetModelState, SetModelState, SetModelConfiguration, \
+    SetModelConfigurationRequest
 from geometry_msgs.msg import Pose
 from std_srvs.srv import Empty
 

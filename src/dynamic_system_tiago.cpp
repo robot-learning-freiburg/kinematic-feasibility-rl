@@ -1,6 +1,5 @@
 #include <modulation_rl/dynamic_system_tiago.h>
 
-
 const RoboConf tiago_config{
     .name = "tiago",
     .joint_model_group_name = "arm_torso",
@@ -18,60 +17,49 @@ const RoboConf tiago_config{
     // straight in front of itself:{0.0, 3.14159265359 / 2, -0.0, -0.0, 0.0, -0.0, 0.0, 3.14159265359 / 2},
     // angewinkelt vor sich: {0.19, 1.1, 0.0, -1.0, 2.0, 1.2, 0.0, 0.0}
     .neutral_pos_values = {0.19, 1.1, 0.0, -1.0, 2.0, 1.2, 0.0, 0.0},
-    // https://github.com/uu-isrc-robotics/uu-isrc-robotics-pr2-pkgs/blob/master/pr2_control_utilities/src/pr2_control_utilities/pr2_planning.py
-    // "r_gripper_tool_joint", "r_gripper_palm_joint", "r_gripper_led_joint", "r_gripper_motor_accelerometer_joint"
-    .eef_joint_names = {"gripper_left_finger_joint", "gripper_right_finger_joint"},
+    .base_cmd_topic = "/mobile_base_controller/cmd_vel",
     .base_vel_rng = 0.2,
     .base_rot_rng = 0.4,
     .z_min = 0.2,
     .z_max = 1.5,
     .restricted_ws_z_min = 0.4,
     .restricted_ws_z_max = 1.1,
-    .gmm_base_offset = 0.0
-};
+    .gmm_base_offset = 0.0};
 
-DynamicSystemTiago::DynamicSystemTiago(
-     uint32_t seed,
-     double min_goal_dist,
-     double max_goal_dist,
-     bool use_base_goal,
-     std::string strategy,
-     std::string real_execution,
-     bool init_controllers,
-     double penalty_scaling,
-     double time_step,
-     double slow_down_real_exec,
-     bool perform_collision_check
-     ) : DynamicSystem_base(
-         seed,
-         min_goal_dist,
-         max_goal_dist,
-         use_base_goal,
-         strategy,
-         real_execution,
-         init_controllers,
-         penalty_scaling,
-         time_step,
-         slow_down_real_exec,
-         perform_collision_check,
-         tiago_config)
-{
+DynamicSystemTiago::DynamicSystemTiago(uint32_t seed,
+                                       double min_goal_dist,
+                                       double max_goal_dist,
+                                       std::string strategy,
+                                       std::string real_execution,
+                                       bool init_controllers,
+                                       double penalty_scaling,
+                                       double time_step,
+                                       double slow_down_real_exec,
+                                       bool perform_collision_check) :
+    DynamicSystem_base(seed,
+                       min_goal_dist,
+                       max_goal_dist,
+                       strategy,
+                       real_execution,
+                       init_controllers,
+                       penalty_scaling,
+                       time_step,
+                       slow_down_real_exec,
+                       perform_collision_check,
+                       tiago_config) {
     setup();
 }
 
-
-void DynamicSystemTiago::setup(){
-    if (init_controllers_){
-        cmd_base_vel_pub_ = nh_->advertise<geometry_msgs::Twist>("/mobile_base_controller/cmd_vel", 1);
-
-        arm_client_.reset( new TrajClientTiago("/arm_controller/follow_joint_trajectory") );
-        while(!arm_client_->waitForServer(ros::Duration(5.0))){
-                ROS_INFO("Waiting for the arm_controller/follow_joint_trajectory action server to come up");
+void DynamicSystemTiago::setup() {
+    if (init_controllers_) {
+        arm_client_.reset(new TrajClientTiago("/arm_controller/follow_joint_trajectory"));
+        while (!arm_client_->waitForServer(ros::Duration(5.0))) {
+            ROS_INFO("Waiting for the arm_controller/follow_joint_trajectory action server to come up");
         }
 
-        torso_client_.reset( new TrajClientTiago("/torso_controller/follow_joint_trajectory") );
-        while(!torso_client_->waitForServer(ros::Duration(5.0))){
-                ROS_INFO("Waiting for the torso_controller/follow_joint_trajectory action server to come up");
+        torso_client_.reset(new TrajClientTiago("/torso_controller/follow_joint_trajectory"));
+        while (!torso_client_->waitForServer(ros::Duration(5.0))) {
+            ROS_INFO("Waiting for the torso_controller/follow_joint_trajectory action server to come up");
         }
 
         arm_goal_.trajectory.joint_names.resize(joint_names_.size() - 1);
@@ -89,9 +77,9 @@ void DynamicSystemTiago::setup(){
         // move_group_arm_torso_->setMaxVelocityScalingFactor(1.0);
         // //move_group_arm_torso_->setMaxAccelerationScalingFactor(0.05);
 
-        gripper_client_.reset( new TrajClientTiago("/gripper_controller/follow_joint_trajectory") );
-        while(!gripper_client_->waitForServer(ros::Duration(5.0))){
-                ROS_INFO("Waiting for the gripper_controller/follow_joint_trajectory action server to come up");
+        gripper_client_.reset(new TrajClientTiago("/gripper_controller/follow_joint_trajectory"));
+        while (!gripper_client_->waitForServer(ros::Duration(5.0))) {
+            ROS_INFO("Waiting for the gripper_controller/follow_joint_trajectory action server to come up");
         }
 
         // somehow the controller manager expects the hash from a pr2_mechanism_msgs::SwitchController, not controller_manager_msgs::SwitchController
@@ -99,23 +87,22 @@ void DynamicSystemTiago::setup(){
     }
 }
 
-
-geometry_msgs::Twist DynamicSystemTiago::calc_desired_base_transform(
-        std::vector<double> &base_actions,
-        tf::Vector3 planned_base_vel,
-        tf::Quaternion planned_base_q,
-        tf::Vector3 planned_gripper_vel,
-        tf::Transform &desiredBaseTransform,
-        double transition_noise_base,
-        double &regularization
-    ){
+geometry_msgs::Twist DynamicSystemTiago::calc_desired_base_transform(std::vector<double> &base_actions,
+                                                                     tf::Vector3 planned_base_vel,
+                                                                     tf::Quaternion planned_base_q,
+                                                                     tf::Vector3 planned_gripper_vel,
+                                                                     tf::Transform &desiredBaseTransform,
+                                                                     double transition_noise_base,
+                                                                     double &regularization,
+                                                                     const double &last_dt,
+                                                                     const tf::Transform &desiredGripperTransform) {
     // a) calculate the new desire baseTransform
-    // planner actions are based on last_dt_, RL actions are for a unit time -> scale down RL actions
-    double base_rot_rng_t = last_dt_ * robo_config_.base_rot_rng;
-    double base_vel_rng_t = last_dt_ * robo_config_.base_vel_rng;
+    // planner actions are based on last_dt, RL actions are for a unit time -> scale down RL actions
+    double base_rot_rng_t = last_dt * robo_config_.base_rot_rng;
+    double base_vel_rng_t = last_dt * robo_config_.base_vel_rng;
     double vel_forward, angle;
 
-    if (strategy_ == "dirvel"){
+    if (strategy_ == "dirvel") {
         vel_forward = base_vel_rng_t * base_actions[0];
         angle = base_rot_rng_t * base_actions[1];
         regularization += pow(base_actions[0], 2.0) + pow(base_actions[1], 2.0);
@@ -124,11 +111,11 @@ geometry_msgs::Twist DynamicSystemTiago::calc_desired_base_transform(
         tf::Vector3 goal_vel_vec;
         double dvel;
         double dangle;
-        if ((strategy_ == "relvelm") || (strategy_ == "relveld")){
+        if ((strategy_ == "relvelm") || (strategy_ == "relveld")) {
             dvel = base_vel_rng_t * base_actions[0];
             dangle = base_rot_rng_t * base_actions[1];
             goal_vel_vec = tf::Vector3(planned_gripper_vel.x(), planned_gripper_vel.y(), 0.0);
-        } else if (strategy_ == "unmodulated"){
+        } else if (strategy_ == "unmodulated") {
             dvel = 0.0;
             dangle = 0.0;
             // goal_vel_vec = tf::Vector3(planned_gripper_vel.x(), planned_gripper_vel.y(), 0.0);
@@ -138,7 +125,7 @@ geometry_msgs::Twist DynamicSystemTiago::calc_desired_base_transform(
         }
 
         vel_forward = goal_vel_vec.length();
-        if (goal_vel_vec.x() < 0.0){
+        if (goal_vel_vec.x() < 0.0) {
             vel_forward = -vel_forward;
         }
         vel_forward += dvel;
@@ -163,7 +150,7 @@ geometry_msgs::Twist DynamicSystemTiago::calc_desired_base_transform(
         vel_forward = utils::clamp_double(vel_forward, -base_vel_rng_t, base_vel_rng_t);
         angle = utils::clamp_double(angle, -base_rot_rng_t, base_rot_rng_t);
 
-        if (strategy_ == "relvelm"){
+        if (strategy_ == "relvelm") {
             // a) modulate as little as possible
             regularization += pow(base_actions[0], 2.0) + pow(base_actions[1], 2.0);
         } else {
@@ -173,7 +160,7 @@ geometry_msgs::Twist DynamicSystemTiago::calc_desired_base_transform(
         }
     }
 
-    if (transition_noise_base > 0.0001){
+    if (transition_noise_base > 0.0001) {
         vel_forward += rng_.gaussian(0.0, transition_noise_base);
         angle += rng_.gaussian(0.0, transition_noise_base);
     }
@@ -190,8 +177,8 @@ geometry_msgs::Twist DynamicSystemTiago::calc_desired_base_transform(
 
     // calculate corresponding cmd, scaled up to a unit time again
     double cmd_scaling = 1.0;
-    if (last_dt_ > 0.001){
-        cmd_scaling /= last_dt_;
+    if (last_dt > 0.001) {
+        cmd_scaling /= last_dt;
     }
     geometry_msgs::Twist base_cmd_rel;
     base_cmd_rel.linear.x = vel_forward * cmd_scaling;
@@ -201,7 +188,7 @@ geometry_msgs::Twist DynamicSystemTiago::calc_desired_base_transform(
 }
 
 // Moveit does not seem capable of updating the plan each iteration, rather just cancels it or similar
-//void DynamicSystemTiago::send_arm_command(const std::vector<double> &target_joint_values, double exec_duration){
+// void DynamicSystemTiago::send_arm_command(const std::vector<double> &target_joint_values, double exec_duration){
 //     move_group_arm_torso_->setStartStateToCurrentState();
 //
 //    for(int i=0; i<joint_names_.size();i++){
@@ -222,13 +209,13 @@ geometry_msgs::Twist DynamicSystemTiago::calc_desired_base_transform(
 ////    return success;
 //}
 
-void DynamicSystemTiago::send_arm_command(const std::vector<double> &target_joint_values, double exec_duration){
+void DynamicSystemTiago::send_arm_command(const std::vector<double> &target_joint_values, double exec_duration) {
     // plan gripper and torso
     // joint_names_ for group arm_torso = [torso_lift_joint, arm_1_joint, arm_2_joint, arm_3_joint, arm_4_joint, arm_5_joint, arm_6_joint, arm_7_joint]
     int idx;
-    for(int i=0; i<joint_names_.size();i++){
+    for (int i = 0; i < joint_names_.size(); i++) {
         // std::cout << joint_names_[i] << std::endl;
-        if (joint_names_[i] == "torso_lift_joint"){
+        if (joint_names_[i] == "torso_lift_joint") {
             idx = 0;
             torso_goal_.trajectory.joint_names[idx] = joint_names_[i];
             torso_goal_.trajectory.points[0].positions[idx] = target_joint_values[i];
@@ -252,22 +239,22 @@ void DynamicSystemTiago::send_arm_command(const std::vector<double> &target_join
     torso_client_->sendGoal(torso_goal_);
 }
 
-bool DynamicSystemTiago::get_arm_success(){
+bool DynamicSystemTiago::get_arm_success() {
     bool success = true;
     torso_client_->waitForResult(ros::Duration(10.0));
-    if(torso_client_->getState() != actionlib::SimpleClientGoalState::SUCCEEDED){
+    if (torso_client_->getState() != actionlib::SimpleClientGoalState::SUCCEEDED) {
         ROS_WARN("The torso_client_ failed.");
         success = false;
     }
     arm_client_->waitForResult(ros::Duration(10.0));
-    if(arm_client_->getState() != actionlib::SimpleClientGoalState::SUCCEEDED){
+    if (arm_client_->getState() != actionlib::SimpleClientGoalState::SUCCEEDED) {
         ROS_WARN("The arm_client_ failed.");
         // throw std::runtime_error("The arm_client_ failed.");
         success &= false;
     }
 }
 
-void DynamicSystemTiago::open_gripper(double position){
+void DynamicSystemTiago::open_gripper(double position, bool wait_for_result) {
     control_msgs::FollowJointTrajectoryGoal goal;
 
     // The joint names, which apply to all waypoints
@@ -286,25 +273,27 @@ void DynamicSystemTiago::open_gripper(double position){
     goal.trajectory.points[index].positions[1] = position / 2;
     // Velocities
     goal.trajectory.points[index].velocities.resize(n);
-    for (int j = 0; j < n; ++j){
+    for (int j = 0; j < n; ++j) {
         goal.trajectory.points[index].velocities[j] = 0.0;
     }
     goal.trajectory.header.stamp = ros::Time::now() + ros::Duration(0.0);
     goal.trajectory.points[index].time_from_start = ros::Duration(2.0);
 
     gripper_client_->sendGoal(goal);
-    gripper_client_->waitForResult(ros::Duration(5.0));
-    if(gripper_client_->getState() != actionlib::SimpleClientGoalState::SUCCEEDED)
-        ROS_WARN("The gripper client failed.");
-    add_trajectory_point(true, true);
-    ros::Duration(0.1).sleep();
+
+    if (wait_for_result) {
+        gripper_client_->waitForResult(ros::Duration(5.0));
+        if (gripper_client_->getState() != actionlib::SimpleClientGoalState::SUCCEEDED)
+            ROS_WARN("The gripper client failed.");
+        ros::Duration(0.1).sleep();
+    }
 }
 
-void DynamicSystemTiago::close_gripper(double position){
-    open_gripper(position);
+void DynamicSystemTiago::close_gripper(double position, bool wait_for_result) {
+    open_gripper(position, wait_for_result);
 }
 
-//void DynamicSystemTiago::stop_controllers(){
+// void DynamicSystemTiago::stop_controllers(){
 //    controllers will try to return to previous pose -> stop and restart
 //    pr2_mechanism_msgs::SwitchController stop;
 //    stop.request.stop_controllers.push_back("arm_controller");
@@ -315,7 +304,7 @@ void DynamicSystemTiago::close_gripper(double position){
 //    };
 //}
 //
-//void DynamicSystemTiago::start_controllers(){
+// void DynamicSystemTiago::start_controllers(){
 //    pr2_mechanism_msgs::SwitchController start;
 //    start.request.start_controllers.push_back("arm_controller");
 //    start.request.start_controllers.push_back("torso_controller");

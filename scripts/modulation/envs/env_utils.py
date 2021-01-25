@@ -4,8 +4,8 @@ from gym import Wrapper
 
 from stable_baselines3.common.vec_env import DummyVecEnv, VecNormalize, sync_envs_normalization
 
-from modulation.envs.modulationEnv import ModulationEnv
 from modulation.envs.tasks import RndStartRndGoalsTask, RestrictedWsTask, BaseChainedTask, PickNPlaceChainedTask, DoorChainedTask, DrawerChainedTask
+from modulation.envs.modulationEnv import ModulationEnv
 from modulation.handle_launchfiles import start_launch_files, stop_launch_files
 
 
@@ -79,14 +79,10 @@ def get_env(config,
                             penalty_scaling=config.penalty_scaling,
                             time_step=config.time_step,
                             slow_down_real_exec=config.slow_down_real_exec,
-                            arctan2_alpha=config.arctan2_alpha,
-                            alpha_direct_rng=config.alpha_direct_rng,
                             seed=config.seed,
-                            use_base_goal=config.use_base_goal,
                             strategy=config.strategy,
                             real_execution=config.real_execution,
                             init_controllers=not config.start_launchfiles_no_controllers,
-                            pause_gripper_action=config.pause_gripper_action,
                             stack_k_obs=config.stack_k_obs,
                             perform_collision_check=config.perform_collision_check,
                             vis_env=config.vis_env,

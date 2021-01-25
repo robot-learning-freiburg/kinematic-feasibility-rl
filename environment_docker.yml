@@ -4,23 +4,23 @@ channels:
   - defaults
   - conda-forge
 dependencies:
-#  INSTALLING A NEW PYTHON WILL SCREW WITH TORCH IN DOCKER
-#  - python=3.6
-#  - pytorch
-#  - torchvision
-#  - cudatoolkit=10.2
+  #  INSTALLING A NEW PYTHON WILL SCREW WITH TORCH IN DOCKER
+  #  - python=3.6
+  #  - pytorch
+  #  - torchvision
+  #  - cudatoolkit=10.2
   - pybind11
   - numpy
   - pip
   - matplotlib
-#  - ninja
-#  - pyyaml
-#  - mkl
-#  - mkl-include
-#  - setuptools
-#  - cmake
-#  - cffi
-#  - magma-cuda102
+  #  - ninja
+  #  - pyyaml
+  #  - mkl
+  #  - mkl-include
+  #  - setuptools
+  #  - cmake
+  #  - cffi
+  #  - magma-cuda102
   - empy
   - pyparsing
   - pillow

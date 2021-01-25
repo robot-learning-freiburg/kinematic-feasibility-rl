@@ -68,4 +68,10 @@
       <node name="tuck_arm" pkg="tiago_gazebo" type="tuck_arm.py" output="screen"/>
   </group>
   <node name="image_proc" pkg="image_proc" type="image_proc" ns="xtion/rgb"/>
+
+  <node pkg="fake_localization" type="fake_localization" name="fake_localization">
+    <remap from="base_pose_ground_truth" to="ground_truth_odom"/>
+    <remap from="initialpose"            to="initialpose"/>
+    <rosparam file="$(find pal_navigation_cfg_tiago_dual)/config/localization/fake.yaml" command="load"/>
+  </node>
 </launch>

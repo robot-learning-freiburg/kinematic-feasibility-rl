@@ -1,7 +1,8 @@
 import numpy as np
+import pandas as pd
+import seaborn as sns
 from matplotlib import pyplot as plt
 from matplotlib.colors import Normalize
-import seaborn as sns
 
 from modulation.utils import rpy_to_quiver_uvw
 
@@ -15,14 +16,14 @@ def plot_pathPoints(path_points: list, show_planned_gripper: bool = True, show_a
         base_x, base_y, base_rot, gripper_x, gripper_y, planned_gripper_x, planned_gripper_y, ik_fails = 8 * [
             np.array([])]
         for i, p in enumerate(path_point):
-            base_x = np.append(base_x, p.base_x)
-            base_y = np.append(base_y, p.base_y)
-            base_rot = np.append(base_rot, p.base_rot)
-            gripper_x = np.append(gripper_x, p.gripper_x)
-            gripper_y = np.append(gripper_y, p.gripper_y)
-            planned_gripper_x = np.append(planned_gripper_x, p.planned_gripper_x)
-            planned_gripper_y = np.append(planned_gripper_y, p.planned_gripper_y)
-            ik_fails = np.append(ik_fails, p.ik_fail)
+            base_x = np.append(base_x, p["base_x"])
+            base_y = np.append(base_y, p["base_y"])
+            base_rot = np.append(base_rot, p["base_rot"])
+            gripper_x = np.append(gripper_x, p["gripper_x"])
+            gripper_y = np.append(gripper_y, p["gripper_y"])
+            planned_gripper_x = np.append(planned_gripper_x, p["planned_gripper_x"])
+            planned_gripper_y = np.append(planned_gripper_y, p["planned_gripper_y"])
+            ik_fails = np.append(ik_fails, p["ik_fail"])
         # only plot every xth point
         idx = np.arange(1, len(path_point), 10)
 
@@ -49,21 +50,24 @@ def plot_pathPoints(path_points: list, show_planned_gripper: bool = True, show_a
 
 def plot_relative_pose_map(path_points: list, max_path_points=25, max_points=4_000):
     path_points = path_points[:max_path_points]
-    gripper_rel_x, gripper_rel_y, gripper_rel_z, gripper_rel_R, gripper_rel_P, gripper_rel_Y, ik_fails = 7 * [
-        np.array([])]
+    gripper_rel_x, gripper_rel_y, gripper_rel_z, gripper_rel_R, gripper_rel_P, gripper_rel_Y, ik_fails = 7 * [np.array([])]
+
+    # subsample to a max number of points
+    total_points = sum([len(p) for p in path_points])
+    nth = max(1, np.ceil(total_points / max_points))
+    counter = 0
+
     for j, path_point in enumerate(path_points):
         for i, p in enumerate(path_point):
-            # subsample to a max of max_points
-            n = max_points // len(path_points)
-            nth = max(1, np.ceil(len(path_point) / n))
-            if (i % nth) == 0:
-                gripper_rel_x = np.append(gripper_rel_x, p.gripper_rel_x)
-                gripper_rel_y = np.append(gripper_rel_y, p.gripper_rel_y)
-                gripper_rel_z = np.append(gripper_rel_z, p.gripper_rel_z)
-                gripper_rel_R = np.append(gripper_rel_R, p.gripper_rel_R)
-                gripper_rel_P = np.append(gripper_rel_P, p.gripper_rel_P)
-                gripper_rel_Y = np.append(gripper_rel_Y, p.gripper_rel_Y)
-                ik_fails = np.append(ik_fails, p.ik_fail)
+            if (counter % nth) == 0:
+                gripper_rel_x = np.append(gripper_rel_x, p["gripper_rel_x"])
+                gripper_rel_y = np.append(gripper_rel_y, p["gripper_rel_y"])
+                gripper_rel_z = np.append(gripper_rel_z, p["gripper_rel_z"])
+                gripper_rel_R = np.append(gripper_rel_R, p["gripper_rel_R"])
+                gripper_rel_P = np.append(gripper_rel_P, p["gripper_rel_P"])
+                gripper_rel_Y = np.append(gripper_rel_Y, p["gripper_rel_Y"])
+                ik_fails = np.append(ik_fails, p["ik_fail"])
+            counter += 1
 
     f, ax = plt.subplots(1, 1, figsize=(14, 12))
     # sns.histplot(x=gripper_rel_x, y=gripper_rel_y, bins=50, cmap="mako", cbar=True, stat='probability', ax=ax)
@@ -94,8 +98,8 @@ def plot_zfailure_hist(path_points: list):
         for i, p in enumerate(path_point):
             # only take every 10th point, assuming the pose won't be changing radically in one step
             if i % 20:
-                gripper_rel_z = np.append(gripper_rel_z, p.gripper_rel_z)
-                ik_fails = np.append(ik_fails, p.ik_fail)
+                gripper_rel_z = np.append(gripper_rel_z, p["gripper_rel_z"])
+                ik_fails = np.append(ik_fails, p["ik_fail"])
 
     f, ax = plt.subplots(1, 1, figsize=(14, 12))
     # sns.histplot(x=gripper_rel_x, y=gripper_rel_y, bins=50, cmap="mako", cbar=True, stat='probability', ax=ax)

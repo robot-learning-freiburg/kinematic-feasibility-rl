@@ -172,6 +172,9 @@ target_link_libraries(linear_planner utils ${catkin_LIBRARIES})
 add_library(gmm_planner src/gmm_planner.cpp)
 target_link_libraries(gmm_planner utils ${catkin_LIBRARIES})
 
+add_library(worlds src/worlds.cpp)
+target_link_libraries(worlds utils ${catkin_LIBRARIES})
+
 add_library(dynamic_system_base src/dynamic_system_base.cpp)
 target_link_libraries(dynamic_system_base modulation modulation_ellipses gaussian_mixture_model linear_planner gmm_planner utils ${LIBGP_LIBRARIES} ${catkin_LIBRARIES})
 
@@ -185,8 +188,14 @@ target_link_libraries(dynamic_system_tiago modulation modulation_ellipses utils 
 # target_link_libraries(dynamic_system_hsr modulation modulation_ellipses utils ${catkin_LIBRARIES})
 
 # pybind
-pybind_add_module(dynamic_system_py SHARED src/dynamic_system_py.cpp src/dynamic_system_base.cpp src/dynamic_system_pr2 src/dynamic_system_tiago src/utils src/base_gripper_planner src/linear_planner src/gmm_planner src/gaussian_mixture_model src/modulation_ellipses)
-target_link_libraries(dynamic_system_py PRIVATE dynamic_system_base dynamic_system_pr2 dynamic_system_tiago modulation utils base_gripper_planner linear_planner gmm_planner gaussian_mixture_model modulation_ellipses ${LIBGP_LIBRARIES} ${catkin_LIBRARIES})
+pybind_add_module(dynamic_system_py SHARED src/worlds src/dynamic_system_py.cpp src/dynamic_system_base.cpp src/dynamic_system_pr2
+    src/dynamic_system_tiago src/utils src/base_gripper_planner src/linear_planner src/gmm_planner
+    src/gaussian_mixture_model src/modulation_ellipses
+    )
+target_link_libraries(dynamic_system_py PRIVATE worlds dynamic_system_base dynamic_system_pr2
+    dynamic_system_tiago modulation utils base_gripper_planner linear_planner gmm_planner
+    gaussian_mixture_model modulation_ellipses ${LIBGP_LIBRARIES} ${catkin_LIBRARIES}
+    )
 
 ## Add cmake target dependencies of the library
 ## as an example, code may need to be generated before libraries

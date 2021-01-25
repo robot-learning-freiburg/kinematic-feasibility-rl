@@ -1,50 +1,45 @@
 #include <modulation_rl/dynamic_system_base.h>
 
+namespace conf {
+    double min_planner_velocity = 0.001;
+    double max_planner_velocity = 0.1;
+}
 
-DynamicSystem_base::DynamicSystem_base(
-    uint32_t seed,
-    double min_goal_dist,
-    double max_goal_dist,
-    bool use_base_goal,
-    std::string strategy,
-    std::string real_execution,
-    bool init_controllers,
-    double penalty_scaling,
-    double time_step,
-    double slow_down_real_exec,
-    bool perform_collision_check,
-    RoboConf robo_config
-    ) : ROSCommonNode(0, NULL, "ds"),
-        nh_ { new ros::NodeHandle("modulation_rl_ik") },
-        rate_ { 50 },
-        rng_ { seed },
-        robo_config_ { robo_config },
-        use_base_goal_ { use_base_goal },
-        strategy_ { strategy },
-        min_goal_dist_ { min_goal_dist },
-        max_goal_dist_ { max_goal_dist },
-        real_execution_ { real_execution },
-        init_controllers_ { init_controllers },
-        penalty_scaling_ { penalty_scaling },
-        // success_thres_dist_ { 0.02 },
-        // success_thres_rot_ { 0.05 },
-        max_allowed_pause_ { 1000 },
-        time_step_real_exec_ { time_step },
-        time_step_train_ { 0.1 },
-        slow_down_factor_ { (real_execution == "sim") ? 1.0 : slow_down_real_exec },
-        perform_collision_check_ { perform_collision_check }
-{
-    if ((real_execution_ != "sim") && (real_execution_ != "gazebo") && (real_execution_ != "world")){throw std::runtime_error("invalid real_execution_ value"); }
-    if (perform_collision_check_ && (robo_config_.name == "hsr")) { throw std::runtime_error("find_ik() not adapted for HSR yet"); }
+DynamicSystem_base::DynamicSystem_base(uint32_t seed,
+                                       double min_goal_dist,
+                                       double max_goal_dist,
+                                       std::string strategy,
+                                       std::string real_execution,
+                                       bool init_controllers,
+                                       double penalty_scaling,
+                                       double time_step,
+                                       double slow_down_real_exec,
+                                       bool perform_collision_check,
+                                       RoboConf robo_config) :
+    ROSCommonNode(0, NULL, "ds"),
+    nh_{new ros::NodeHandle("modulation_rl_ik")},
+    rate_{50},
+    rng_{seed},
+    robo_config_{robo_config},
+    strategy_{strategy},
+    min_goal_dist_{min_goal_dist},
+    max_goal_dist_{max_goal_dist},
+    init_controllers_{init_controllers},
+    penalty_scaling_{penalty_scaling},
+    // success_thres_dist_ { 0.02 },
+    // success_thres_rot_ { 0.05 },
+    time_step_real_exec_{time_step},
+    time_step_train_{0.1},
+    perform_collision_check_{perform_collision_check} {
+    if (perform_collision_check_ && (robo_config_.name == "hsr")) {
+        throw std::runtime_error("find_ik() not adapted for HSR yet");
+    }
 
     traj_visualizer_ = nh_->advertise<moveit_msgs::DisplayTrajectory>("traj_visualizer", 1);
     gripper_visualizer_ = nh_->advertise<visualization_msgs::Marker>("gripper_goal_visualizer", 1);
-    // gripper_plan_visualizer_ = nh_->advertise<visualization_msgs::MarkerArray>("gripper_plan_visualizer", 1000);
-    // state_visualizer_ = nh_->advertise<visualization_msgs::MarkerArray>("state_visualizer", 10);
     robstate_visualizer_ = nh_->advertise<moveit_msgs::DisplayRobotState>("robot_state_visualizer", 50);
-    // fail_state_visualizer_ = nh_->advertise<visualization_msgs::MarkerArray>("fail_state_visualizer", 10);
     ellipses_pub_ = nh_->advertise<visualization_msgs::MarkerArray>("/GMM/Ellipses", 1, true);
-
+    cmd_base_vel_pub_ = nh_->advertise<geometry_msgs::Twist>(robo_config_.base_cmd_topic, 1);
     client_get_scene_ = nh_->serviceClient<moveit_msgs::GetPlanningScene>("/get_planning_scene");
 
     // https://readthedocs.org/projects/moveit/downloads/pdf/latest/
@@ -67,12 +62,12 @@ DynamicSystem_base::DynamicSystem_base(
     link_names_ = joint_model_group_->getLinkModelNames();
 
     planning_scene_.reset(new planning_scene::PlanningScene(kinematic_model));
-    ROS_INFO("Planning frame: %s",planning_scene_->getPlanningFrame().c_str());
+    ROS_INFO("Planning frame: %s", planning_scene_->getPlanningFrame().c_str());
 
     moveit_msgs::GetPlanningScene scene_srv1;
     moveit_msgs::PlanningScene currentScene;
-    scene_srv1.request.components.components = 2;// moveit_msgs::PlanningSceneComponents::ROBOT_STATE;
-    if(!client_get_scene_.call(scene_srv1)){
+    scene_srv1.request.components.components = 2;  // moveit_msgs::PlanningSceneComponents::ROBOT_STATE;
+    if (!client_get_scene_.call(scene_srv1)) {
         ROS_WARN("Failed to call service /get_planning_scene");
     }
     planning_scene_->setPlanningSceneDiffMsg(scene_srv1.response.scene);
@@ -80,15 +75,14 @@ DynamicSystem_base::DynamicSystem_base(
     display_trajectory_.model_id = robo_config_.name;
     moveit_msgs::RobotState start_state;
 
-    const std::vector< std::string > &all_joint_names = kinematic_model->getJointModelNames();
-    for ( int j=0; j < all_joint_names.size(); j++ ){
+    const std::vector<std::string> &all_joint_names = kinematic_model->getJointModelNames();
+    for (int j = 0; j < all_joint_names.size(); j++) {
         const std::string name = all_joint_names[j];
         const double default_value = kinematic_state_->getJointPositions(name)[0];
         const double actual_value = robstate.getJointPositions(name)[0];
 
         // avoid adding joints that are not defined in other places (e.g. rviz)
-        if (std::abs(default_value - actual_value) > 0.0000001){
-//        if (default_value != actual_value){
+        if (std::abs(default_value - actual_value) > 0.0000001) {
             // std::cout << name << ", " << default_value << ", " << actual_value << std::endl;
             start_state.joint_state.name.push_back(name);
             start_state.joint_state.position.push_back(actual_value);
@@ -110,95 +104,67 @@ DynamicSystem_base::DynamicSystem_base(
     start_state.multi_dof_joint_state.transforms.push_back(startTransform);
     display_trajectory_.trajectory_start = start_state;
 
-    if ((real_execution_ != "sim") && !init_controllers_){ throw std::runtime_error("must have initialised controllers to use real_execution_"); }
+    set_real_execution(real_execution, time_step_real_exec_, slow_down_real_exec);
+
     // always do this so we can later change to real_execution
-    if (init_controllers_){
-        // real world:
-        listener_.waitForTransform(robo_config_.frame_id, "base_footprint",  ros::Time(0), ros::Duration(10.0));
-
-        // gazebo:
-        get_model_state_client_ = nh_->serviceClient<gazebo_msgs::GetModelState>("/gazebo/get_model_state");
-        set_model_state_client_ = nh_->serviceClient<gazebo_msgs::SetModelState>("/gazebo/set_model_state");
-        set_model_configuration_client_ = nh_->serviceClient<gazebo_msgs::SetModelConfiguration>("/gazebo/set_model_configuration");
-        pause_gazebo_client_ = nh_->serviceClient<std_srvs::Empty>("/gazebo/pause_physics");
-        unpause_gazebo_client_ = nh_->serviceClient<std_srvs::Empty>("/gazebo/unpause_physics");
-
+    if (init_controllers_) {
         planning_scene_monitor_.reset(new planning_scene_monitor::PlanningSceneMonitor(robot_model_loader));
         planning_scene_monitor_->startSceneMonitor("/my_planning_scene");
     }
 
-    if (perform_collision_check_){
+    if (perform_collision_check_) {
         // Collision constraint function GroupStateValidityCallbackFn(),
         moveit_msgs::GetPlanningScene scene_srv;
         moveit_msgs::PlanningScene currentScene;
-        scene_srv.request.components.components = 24;// moveit_msgs::PlanningSceneComponents::WORLD_OBJECT_NAMES;
-        if(!client_get_scene_.call(scene_srv)){
+        scene_srv.request.components.components = 24;  // moveit_msgs::PlanningSceneComponents::WORLD_OBJECT_NAMES;
+        if (!client_get_scene_.call(scene_srv)) {
             ROS_WARN("Failed to call service /get_planning_scene");
         }
         currentScene = scene_srv.response.scene;
         ROS_INFO("Known collision objects:");
-        for (int i = 0; i < (int)scene_srv.response.scene.world.collision_objects.size(); ++i){
+        for (int i = 0; i < (int)scene_srv.response.scene.world.collision_objects.size(); ++i) {
             ROS_INFO_STREAM(scene_srv.response.scene.world.collision_objects[i].id);
         }
         planning_scene_->setPlanningSceneDiffMsg(currentScene);
         constraint_callback_fn_ = boost::bind(&validityFun::validityCallbackFn, planning_scene_, kinematic_state_, _2, _3);
     }
 
-    if (strategy_ == "modulate_ellipse"){
+    if (strategy_ == "modulate_ellipse") {
         modulation_.setEllipses();
     }
 }
 
-void DynamicSystem_base::set_real_execution(std::string real_execution, double time_step, double slow_down_real_exec){
-    if ((real_execution_ != "sim") && (real_execution_ != "gazebo") && (real_execution_ != "world")){throw std::runtime_error("invalid real_execution_ value"); }
-    if ((real_execution != "sim") && !init_controllers_){ throw std::runtime_error("must have initialised controllers to use real_execution_"); }
-    real_execution_ = real_execution;
-    time_step_real_exec_ = time_step;
-    slow_down_factor_ = (real_execution_ == "sim") ? 1.0 : slow_down_real_exec;
-}
-
-void DynamicSystem_base::add_fail_state_marker(){
-    // http://docs.ros.org/melodic/api/moveit_core/html/classmoveit_1_1core_1_1RobotState.html#a2aa936d9626c469ecb729e0016a5c94d
-    // pushes the new markers onto the existing array, keeping those before
-    kinematic_state_->getRobotMarkers(fail_state_marker_, link_names_, get_ik_color(0.3), "fail_state", ros::Duration());
-
-    geometry_msgs::Pose pose;
-    pose.position.x = currentBaseTransform_.getOrigin().x();
-    pose.position.y = currentBaseTransform_.getOrigin().y();
-    pose.position.z = currentGripperTransform_.getOrigin().z();
-    pose.orientation.x = currentBaseTransform_.getRotation().x();
-    pose.orientation.y = currentBaseTransform_.getRotation().y();
-    pose.orientation.z = currentBaseTransform_.getRotation().z();
-    pose.orientation.w = currentBaseTransform_.getRotation().w();
-
-    visualization_msgs::MarkerArray new_markers;
-
-    // only update new ones
-    for (int i=fail_state_marker_.markers.size() - link_names_.size(); i < fail_state_marker_.markers.size(); i++){
-        fail_state_marker_.markers[i].id += marker_counter_;
-        fail_state_marker_.markers[i].header.frame_id = robo_config_.frame_id;
-        fail_state_marker_.markers[i].pose = pose;
-
-        new_markers.markers.push_back(fail_state_marker_.markers[i]);
+void DynamicSystem_base::set_real_execution(std::string real_execution, double time_step, double slow_down_real_exec) {
+    if (real_execution == "gazebo") {
+        world_ = new GazeboWorld();
+    } else if (real_execution == "world") {
+        world_ = new RealWorld();
+    } else if (real_execution == "sim") {
+        world_ = new SimWorld();
+    } else {
+        throw std::runtime_error("Unknown real_execution value");
     }
-    fail_state_visualizer_.publish(new_markers);
+    if ((!world_->is_analytical()) && !init_controllers_) {
+        throw std::runtime_error("must have initialised controllers to use real_execution_");
+    }
+    time_step_real_exec_ = time_step;
+    slow_down_factor_ = (world_->is_analytical()) ? 1.0 : slow_down_real_exec;
 }
 
-void DynamicSystem_base::set_new_random_goal(std::string gripper_goal_distribution){
+void DynamicSystem_base::set_new_random_goal(std::string gripper_goal_distribution) {
     // slightly hacky / hardcoded real world case to ensure we get a random goal in a valid part of the map
     tf::Transform currentBase;
     double min_goal_height = (gripper_goal_distribution == "restricted_ws") ? robo_config_.restricted_ws_z_min : robo_config_.z_min;
     double max_goal_height = (gripper_goal_distribution == "restricted_ws") ? robo_config_.restricted_ws_z_max : robo_config_.z_max;
 
     // only used in real world execution
-    double min_x = -0.0, max_x = 3.5, min_y = -0.0, max_y = 2.0, max_y_small = 1.0;
-    if (real_execution_ == "world"){
-        currentBase = get_base_transform_world();
+    if (world_->get_name() == "world") {
+        currentBase = world_->get_base_transform_world();
     } else {
         currentBase.setIdentity();
     }
     bool valid = false;
-    while (!valid){
+    while (!valid) {
         // random goal around the origin
         currentGripperGOAL_.setIdentity();
         double goal_dist = rng_.uniformReal(min_goal_dist_, max_goal_dist_);
@@ -206,7 +172,7 @@ void DynamicSystem_base::set_new_random_goal(std::string gripper_goal_distributi
         int rnd_sign = (rng_.uniformInteger(0, 1) == 1) ? 1 : -1;
 
         double x_goal = currentBase.getOrigin().x() + goal_dist * cos(goal_orientation);
-        double y_goal = currentBase.getOrigin().y() + ((double) rnd_sign) * goal_dist * sin(goal_orientation);
+        double y_goal = currentBase.getOrigin().y() + ((double)rnd_sign) * goal_dist * sin(goal_orientation);
         double z_goal = rng_.uniformReal(min_goal_height, max_goal_height);
         currentGripperGOAL_.setOrigin(tf::Vector3(x_goal, y_goal, z_goal));
 
@@ -214,24 +180,20 @@ void DynamicSystem_base::set_new_random_goal(std::string gripper_goal_distributi
         q_goal.setRPY(rng_.uniformReal(0.0, 2 * M_PI), rng_.uniformReal(0.0, 2 * M_PI), rng_.uniformReal(0.0, 2 * M_PI));
         currentGripperGOAL_.setRotation(q_goal.normalized());
 
-        if (gripper_goal_distribution == "fixed"){
+        if (gripper_goal_distribution == "fixed") {
             throw std::runtime_error("Fixed gripper_goal_distribution not implemented anymore");
         }
 
-        if (real_execution_ == "world"){
+        if (world_->get_name() == "world") {
             // ensure the goal is within our map
-            tf::Vector3 g = currentGripperGOAL_.getOrigin();
-            valid = (g.x() >= min_x) && (g.x() <= max_x) && (g.y() >= min_y) && (g.y() <= max_y);
-            if (g.x() <= 1.0){
-                valid &= (g.y() <= max_y_small);
-            }
-            if (valid){
+            valid = world_->is_within_world(currentGripperGOAL_);
+            if (valid) {
                 add_goal_marker_tf(currentGripperGOAL_, 99999, "pink");
-                std::cout<< "Next gripper goal in world coordinates: (" << x_goal <<", " << y_goal << ")." << std::endl;
+                std::cout << "Next gripper goal in world coordinates: (" << x_goal << ", " << y_goal << ")." << std::endl;
                 std::string accept = "";
-                while ((accept != "a") && (accept != "n")){
-                    std::cout << "Press 'a' to accept, 'n' to try again: "; // Type smth and press enter
-                    std::cin >> accept; // Get user input from the keyboard
+                while ((accept != "a") && (accept != "n")) {
+                    std::cout << "Press 'a' to accept, 'n' to try again: ";  // Type smth and press enter
+                    std::cin >> accept;                                      // Get user input from the keyboard
                     std::cout << "Received input: " << accept << std::endl;
                     valid &= (accept == "a");
                 }
@@ -247,11 +209,11 @@ void DynamicSystem_base::set_new_random_goal(std::string gripper_goal_distributi
     // kinematic_state_->setJointGroupPositions(joint_model_group_, current_joint_values_);
 }
 
-tf::Transform DynamicSystem_base::parse_goal(const std::vector<double> &gripper_goal){
+tf::Transform DynamicSystem_base::parse_goal(const std::vector<double> &gripper_goal) {
     tf::Quaternion rotation;
-    if (gripper_goal.size() == 6){
+    if (gripper_goal.size() == 6) {
         rotation.setRPY(gripper_goal[3], gripper_goal[4], gripper_goal[5]);
-    } else if (gripper_goal.size() == 7){
+    } else if (gripper_goal.size() == 7) {
         rotation = tf::Quaternion(gripper_goal[3], gripper_goal[4], gripper_goal[5], gripper_goal[6]);
     } else {
         throw std::runtime_error("invalid length of specified gripper goal");
@@ -259,72 +221,67 @@ tf::Transform DynamicSystem_base::parse_goal(const std::vector<double> &gripper_
     return tf::Transform(rotation, tf::Vector3(gripper_goal[0], gripper_goal[1], gripper_goal[2]));
 }
 
-std::vector<double> DynamicSystem_base::set_gripper_goal(
-        std::vector<double> gripper_goal,
-        std::string gripper_goal_distribution,
-        std::string gmm_model_path,
-        double success_thres_dist,
-        double success_thres_rot
-    ){
+std::vector<double> DynamicSystem_base::set_gripper_goal(std::vector<double> gripper_goal,
+                                                         std::string gripper_goal_distribution,
+                                                         std::string gmm_model_path,
+                                                         double success_thres_dist,
+                                                         double success_thres_rot,
+                                                         double start_pause) {
     success_thres_dist_ = success_thres_dist;
     success_thres_rot_ = success_thres_rot;
+    start_pause_ = start_pause;
 
     // update the current state again before we start a new subgoal
-    if (real_execution_ != "sim"){
-        currentBaseTransform_ = get_base_transform_world();
+    if (!world_->is_analytical()) {
+        currentBaseTransform_ = world_->get_base_transform_world();
         // currently failling to call /get_planning_scene for hsr so just don't update
         update_current_gripper_from_world();
     }
     tf::Transform currentGripperGOAL_input;
-    if (gripper_goal.empty()){
+    if (gripper_goal.empty()) {
         set_new_random_goal(gripper_goal_distribution);
         currentGripperGOAL_input = currentGripperGOAL_;
     } else {
-        if (use_base_goal_){ throw std::runtime_error("use_base_goal doesn't work with manual specified gripper goals"); }
         currentGripperGOAL_input = parse_goal(gripper_goal);
         // transform from a goal for the gripper tip into a goal for the specified gripper link
         currentGripperGOAL_ = utils::tip_to_gripper_goal(currentGripperGOAL_input, robo_config_.tip_to_gripper_offset, robo_config_.gripper_to_base_rot_offset);
     }
 
-    // There's probably a better way than redefining the planner everytime. Need to delete the old pointer? Causes crash though
-    // delete gripper_planner_;
+    // There's probably a better way than redefining the planner everytime
     // NOTE: IF ADJUSTING PLANNER VELOCITY CONSTRAINTS, ALSO ADJUST robo_config_.base_vel_rng, robo_config_.base_rot_rng (DON'T FORGET TIAGO)
     if (gmm_model_path != ""){
-        gripper_planner_ = new GMMPlanner(0.001, 0.1, use_base_goal_, robo_config_.tip_to_gripper_offset, robo_config_.gripper_to_base_rot_offset);
-        // goal for gmm planner is the origin of the object -> pass original goal input into planner, then change to the goal for the wrist after instantiating, then call tip_to_gripper_goal() again
-        gripper_planner_->reset(currentGripperGOAL_input, currentGripperTransform_, currentBaseGOAL_, currentBaseTransform_, gmm_model_path, robo_config_.gmm_base_offset);
+        // goal for gmm planner is origin of the object -> pass original goal input to planner, then change to wrist goal after instantiating, then call tip_to_gripper_goal() again
+        gripper_planner_ = new GMMPlanner(robo_config_.tip_to_gripper_offset,
+                                          robo_config_.gripper_to_base_rot_offset,
+                                          currentGripperGOAL_input,
+                                          currentGripperTransform_,
+                                          currentBaseGOAL_,
+                                          currentBaseTransform_,
+                                          gmm_model_path,
+                                          robo_config_.gmm_base_offset);
         currentGripperGOAL_ = gripper_planner_->get_last_attractor();
         currentGripperGOAL_ = utils::tip_to_gripper_goal(currentGripperGOAL_, robo_config_.tip_to_gripper_offset, robo_config_.gripper_to_base_rot_offset);
 
         // display the attractors of the gmm
         std::vector<tf::Transform> mus = gripper_planner_->get_mus();
-        for (int i=0; i< mus.size(); i++){
+        for (int i = 0; i < mus.size(); i++) {
             visualization_msgs::Marker m = utils::marker_from_transform(mus[i], "gmm_mus", "blue", 1.0, 0, robo_config_.frame_id);
             gripper_visualizer_.publish(m);
         }
     } else {
-        // speed limits per second
-        gripper_planner_ = new LinearPlanner(0.001, 0.1, use_base_goal_);
-        gripper_planner_->reset(currentGripperGOAL_, currentGripperTransform_, currentBaseGOAL_, currentBaseTransform_, gmm_model_path, robo_config_.gmm_base_offset);
+        gripper_planner_ = new LinearPlanner(currentGripperGOAL_, currentGripperTransform_, currentBaseGOAL_, currentBaseTransform_);
     }
     // plan velocities to be modulated and set in next step. Assumes currentGripperTransform_, currentGripperTransform_ and prev_gripper_plan_ have already been set
+    set_goal_time_ = time_;
     bool pause_gripper = in_start_pause();
-    last_dt_ = update_time(pause_gripper);
+    double last_dt = update_time(pause_gripper);
     // loading gmm models can take a small bit of time, so set the time_planner_ to zero afterwards
     time_planner_ = 0.0;
-    last_dt_ = rate_.expectedCycleTime().toSec() / 2.0;
-    next_plan_ = gripper_planner_->get_next_velocities(
-        time_planner_ / slow_down_factor_,
-        last_dt_ / slow_down_factor_,
-        currentBaseTransform_,
-        currentGripperTransform_,
-        tf::Vector3(0, 0, 0),
-        tf::Vector3(0, 0, 0),
-        tf::Quaternion(0, 0, 0, 0),
-        !pause_gripper
-    );
 
-    if (init_controllers_){
+    planned_gripper_vel_.init();
+    planned_base_vel_.init();
+
+    if (init_controllers_) {
         // only for evaluations on the tasks to check collisions with objects of the scene
         // relies on the gazebo scene plugin to make the planning scene available
         // we assume that the objects won't change after the call to reset()
@@ -335,11 +292,7 @@ std::vector<double> DynamicSystem_base::set_gripper_goal(
         allowed_collisions.push_back("ground_plane.link");
         planning_scene::PlanningScenePtr scene = planning_scene_monitor_->getPlanningScene();
         // scene->getCurrentStateNonConst().update();
-        setAllowedCollisionMatrix(
-            scene,
-            allowed_collisions,
-            true
-        );
+        setAllowedCollisionMatrix(scene, allowed_collisions, true);
     }
 
     visualization_msgs::Marker goal_input_marker = utils::marker_from_transform(currentGripperGOAL_input, "gripper_goal_input", utils::get_color_msg("blue"), marker_counter_, robo_config_.frame_id);
@@ -350,52 +303,42 @@ std::vector<double> DynamicSystem_base::set_gripper_goal(
     return build_obs_vector(tf::Vector3(0, 0, 0), tf::Vector3(0, 0, 0), tf::Quaternion(0, 0, 0, 0));
 }
 
-void DynamicSystem_base::set_gripper_to_neutral(){
+void DynamicSystem_base::set_gripper_to_neutral() {
     // a) predefined neutral position
     kinematic_state_->setVariablePositions(robo_config_.neutral_pos_joint_names, robo_config_.neutral_pos_values);
     // update values
-    const Eigen::Affine3d& end_effector_state = kinematic_state_->getGlobalLinkTransform(robo_config_.global_link_transform);
+    const Eigen::Affine3d &end_effector_state = kinematic_state_->getGlobalLinkTransform(robo_config_.global_link_transform);
     tf::transformEigenToTF(end_effector_state, rel_gripper_pose_);
     currentGripperTransform_ = currentBaseTransform_ * rel_gripper_pose_;
 
     kinematic_state_->copyJointGroupPositions(joint_model_group_, current_joint_values_);
-
-    // // b) set to a defined postion from ($roscd pr2_moveit_config)/config/pr2.srdf
-    // NOTE: set_gripper_to_neutral IS INHERITED BY THE OTHER ROBOTS. IF CHANGING, MAKE SURE TO ADAPT THOSE AS WELL
-    // BUT: NOT SURE HOW NEUTRAL IT IS
-    // kinematic_state_->setToDefaultValues(joint_model_group_, "tuck_right_arm");
-    // // update values
-    // const Eigen::Affine3d& end_effector_state = kinematic_state_->getGlobalLinkTransform(robo_config_.global_link_transform);
-    // tf::transformEigenToTF(end_effector_state, rel_gripper_pose_);
-    // currentGripperTransform_ = currentBaseTransform_ * rel_gripper_pose_;
-    // kinematic_state_->copyJointGroupPositions(joint_model_group_, current_joint_values_);
 }
 
-double DynamicSystem_base::draw_rng(double lower, double upper){
-    if (lower == upper){
+double DynamicSystem_base::draw_rng(double lower, double upper) {
+    if (lower == upper) {
         return lower;
-    } else if (lower > upper){
+    } else if (lower > upper) {
         throw std::runtime_error("lower > upper");
     } else {
         return rng_.uniformReal(lower, upper);
     }
 }
 
-bool DynamicSystem_base::out_of_workspace(tf::Transform gripper_tf){
-    return(gripper_tf.getOrigin().z() < robo_config_.restricted_ws_z_min) || (gripper_tf.getOrigin().z() > robo_config_.restricted_ws_z_max);
+bool DynamicSystem_base::out_of_workspace(tf::Transform gripper_tf) {
+    return (gripper_tf.getOrigin().z() < robo_config_.restricted_ws_z_min) || (gripper_tf.getOrigin().z() > robo_config_.restricted_ws_z_max);
 }
 
 // base_start: [xmin, xmax, ymin, ymax] or empty to use origin
-bool DynamicSystem_base::set_start_pose(std::vector<double> base_start, std::string start_pose_distribution){
+bool DynamicSystem_base::set_start_pose(std::vector<double> base_start, std::string start_pose_distribution) {
     // Reset Base to origin
     double xbase = 0, ybase = 0, yawbase = 0;
 
-    if (real_execution_ == "world"){
+    if (world_->get_name() == "world") {
         ROS_INFO("Real world execution set. Taking the current base transform as starting point.");
-        currentBaseTransform_ = get_base_transform_world();
+        currentBaseTransform_ = world_->get_base_transform_world();
     } else {
-        if (!base_start.empty()){
-            if (base_start.size() != 6){ throw std::runtime_error("invalid length of specified base_start"); }
+        if (!base_start.empty()) {
+            if (base_start.size() != 6) { throw std::runtime_error("invalid length of specified base_start"); }
             xbase = draw_rng(base_start[0], base_start[1]);
             ybase = draw_rng(base_start[2], base_start[3]);
             yawbase = draw_rng(base_start[4], base_start[5]);
@@ -407,16 +350,16 @@ bool DynamicSystem_base::set_start_pose(std::vector<double> base_start, std::str
         currentBaseTransform_.setRotation(q_base);
     }
     // Reset Gripper pose to start
-    if (start_pose_distribution == "fixed"){
+    if (start_pose_distribution == "fixed") {
         set_gripper_to_neutral();
-    } else if ((start_pose_distribution == "rnd") || (start_pose_distribution == "restricted_ws")){
+    } else if ((start_pose_distribution == "rnd") || (start_pose_distribution == "restricted_ws")) {
         // c) RANDOM pose relative to base
         collision_detection::CollisionRequest collision_request;
         collision_request.group_name = robo_config_.joint_model_group_name;
         collision_detection::CollisionResult collision_result;
 
         bool invalid = true;
-        while (invalid){
+        while (invalid) {
             kinematic_state_->setToRandomPositions(joint_model_group_, rng_);
 
             // check if in self-collision
@@ -432,8 +375,8 @@ bool DynamicSystem_base::set_start_pose(std::vector<double> base_start, std::str
             ROS_INFO_COND(collision_result.collision, "set_start_pose: drawn pose in self-collision, trying again");
             collision_result.clear();
 
-            if(start_pose_distribution == "restricted_ws"){
-                const Eigen::Affine3d& ee_pose = kinematic_state_->getGlobalLinkTransform(robo_config_.global_link_transform);
+            if (start_pose_distribution == "restricted_ws") {
+                const Eigen::Affine3d &ee_pose = kinematic_state_->getGlobalLinkTransform(robo_config_.global_link_transform);
                 tf::Transform temp_tf;
                 tf::transformEigenToTF(ee_pose, temp_tf);
                 invalid &= out_of_workspace(temp_tf);
@@ -441,7 +384,7 @@ bool DynamicSystem_base::set_start_pose(std::vector<double> base_start, std::str
             }
         }
 
-        const Eigen::Affine3d& end_effector_state = kinematic_state_->getGlobalLinkTransform(robo_config_.global_link_transform);
+        const Eigen::Affine3d &end_effector_state = kinematic_state_->getGlobalLinkTransform(robo_config_.global_link_transform);
         tf::transformEigenToTF(end_effector_state, rel_gripper_pose_);
         // multiplication theoretically unnecessary as long as currentBaseTransform_ is the identity
         currentGripperTransform_ = currentBaseTransform_ * rel_gripper_pose_;
@@ -450,57 +393,56 @@ bool DynamicSystem_base::set_start_pose(std::vector<double> base_start, std::str
         throw std::runtime_error("Invalid start_pose_distribution");
     }
 
-    bool success = (real_execution_ == "sim") ? true : set_pose_in_world();
+    bool success = set_pose_in_world();
     return success;
 }
 
 // gripper_goal: [x, y, z, roll, pitch, yaw] or empty to draw a random goal
 // base_start: [xmin, xmax, ymin, ymax] in meters
-std::vector< double > DynamicSystem_base::reset(
-        std::vector<double> gripper_goal,
-        std::vector<double> base_start,
-        std::string start_pose_distribution,
-        std::string gripper_goal_distribution,
-        bool do_close_gripper,
-        std::string gmm_model_path,
-        double success_thres_dist,
-        double success_thres_rot,
-        double start_pause,
-        bool verbose)
-    {
-    if (real_execution_ != "sim"){ ROS_INFO("Reseting environment"); }
+std::vector<double> DynamicSystem_base::reset(std::vector<double> gripper_goal,
+                                              std::vector<double> base_start,
+                                              std::string start_pose_distribution,
+                                              std::string gripper_goal_distribution,
+                                              bool do_close_gripper,
+                                              std::string gmm_model_path,
+                                              double success_thres_dist,
+                                              double success_thres_rot,
+                                              double start_pause,
+                                              bool verbose) {
+    ROS_INFO_COND(!world_->is_analytical(), "Reseting environment");
 
     ik_error_count_ = 0;
     verbose_ = verbose;
-    start_pause_ = start_pause;
     // set start for both base and gripper
-    // if real_execution_, we actually execute it in gazebo to reset. This might sometimes fail. So continue sampling a few random poses
+    // if not the analytical env, we actually execute it in gazebo to reset. This might sometimes fail. So continue sampling a few random poses
     bool success = false;
     int trials = 0, max_trials = 50;
-    while ((!success) && trials < max_trials){
+    while ((!success) && trials < max_trials) {
         success = set_start_pose(base_start, start_pose_distribution);
         trials++;
     }
-    if ((trials > max_trials) && (real_execution_ != "world")){
-        ROS_WARN("Could not set start pose after 50 trials!!! Calling /gazebo/reset_world and trying again.");
-        ros::ServiceClient reset_client = nh_->serviceClient<std_srvs::Empty>("/gazebo/reset_world");
-        std_srvs::Empty emptySrv;
-        reset_client.call(emptySrv);
-        ros::Duration(3.0).sleep();
-        trials = 0;
-        while (!success){
-            success = set_start_pose(base_start, start_pose_distribution);
-            trials++;
-            if (trials > max_trials){ throw std::runtime_error("Could not set start pose after 50 trials!!!"); }
-        }
+    if (trials > max_trials) {
+        throw std::runtime_error("Could not set start pose after 50 trials!!!");
+
+//        ROS_WARN("Could not set start pose after 50 trials!!! Calling /gazebo/reset_world and trying again.");
+//        ros::ServiceClient reset_client = nh_->serviceClient<std_srvs::Empty>("/gazebo/reset_world");
+//        std_srvs::Empty emptySrv;
+//        reset_client.call(emptySrv);
+//        ros::Duration(3.0).sleep();
+//        trials = 0;
+//        while (!success){
+//            success = set_start_pose(base_start, start_pose_distribution);
+//            trials++;
+//            if (trials > max_trials){ throw std::runtime_error("Could not set start pose after 50 trials!!!"); }
+//        }
     }
 
-    if (do_close_gripper){
-        close_gripper(0.0);
+    if (do_close_gripper) {
+        close_gripper(0.0, false);
     }
 
     // reset time after the start pose is set
-    time_ = (real_execution_ == "sim") ? 0.0 : ros::Time::now().toSec();
+    time_ = (world_->is_analytical()) ? 0.0 : ros::Time::now().toSec();
     reset_time_ = time_;
 
     // Clear the visualizations
@@ -512,38 +454,31 @@ std::vector< double > DynamicSystem_base::reset(
 
     display_trajectory_.trajectory.clear();
     pathPoints_.clear();
-    fail_state_marker_.markers.clear();
     gripper_plan_marker_.markers.clear();
     marker_counter_++;
-    if(marker_counter_ > 3){ marker_counter_ = 0; }
+    if (marker_counter_ > 3) {
+        marker_counter_ = 0;
+    }
 
     // Set new random goals for base and gripper. Assumes that we've already set the currentBaseTransform_, currentGripperTransform_
     // also sets the plan for the first step
-    std::vector<double> obs = set_gripper_goal(gripper_goal, gripper_goal_distribution, gmm_model_path, success_thres_dist, success_thres_rot);
+    std::vector<double> obs = set_gripper_goal(gripper_goal, gripper_goal_distribution, gmm_model_path, success_thres_dist, success_thres_rot, start_pause);
 
-    // update_robot_start_state_marker();
-    add_trajectory_point(true, true);
+    add_trajectory_point(gripper_planner_->get_prev_plan(), true);
 
     // return observation vector
     return obs;
 }
 
 // easiest way to know the dim without having to enforce that everything is already initialised
-int DynamicSystem_base::get_obs_dim(){
-    int n = 22;
-    if (use_base_goal_){
-        n += 7;
-    }
-    return n + joint_names_.size();
+int DynamicSystem_base::get_obs_dim() {
+    return 22 + joint_names_.size();
 }
 
-
 // Build the observation vector
-std::vector<double> DynamicSystem_base::build_obs_vector(
-        tf::Vector3 current_planned_base_vel_world,
-        tf::Vector3 current_planned_gripper_vel_world,
-        tf::Quaternion current_planned_gripper_vel_dq
-    ){
+std::vector<double> DynamicSystem_base::build_obs_vector(tf::Vector3 current_planned_base_vel_world,
+                                                         tf::Vector3 current_planned_gripper_vel_world,
+                                                         tf::Quaternion current_planned_gripper_vel_dq) {
     std::vector<double> obs_vector;
     // whether to represent rotations as quaternions or euler angles
     bool use_euler = false;
@@ -553,109 +488,74 @@ std::vector<double> DynamicSystem_base::build_obs_vector(
     utils::add_rotation(obs_vector, rel_gripper_pose_.getRotation(), use_euler);
 
     // always provide the RL agent with the velocities normed to the time step used in training
-    // a) scale up by dividing by dt (take care of division by (bear) 0!)
-    // b) provide the plan for in 1 training time step
-    // NOTE: gripper_planner_.prevPlan was already updated now! -> workaround fn get_velocities_from_prevPrev to get the next plan built upon the 2nd last plan
-    // std::cout << "time_: "<< time_ - reset_time_ << " time_planner_: " << time_planner_ << ", last_dt_: " << last_dt_ << ", time_step_: " << time_step_ << std::endl;
-    GripperPlan next_plan_training = gripper_planner_->get_velocities_from_prevPrev(
+    GripperPlan next_plan_training = gripper_planner_->get_next_velocities(
         time_planner_ / slow_down_factor_,
         in_start_pause() ? 0.0 : time_step_train_,  // NOTE: should we include slow_down_factor_ here as well? -> SEEMS TO REDUCE PERFORMANCE FOR RELVEL, DIRVEL DOESN'T CARE
         currentBaseTransform_,
         currentGripperTransform_,
         current_planned_base_vel_world,
         current_planned_gripper_vel_world,
-        current_planned_gripper_vel_dq
-    );
+        current_planned_gripper_vel_dq,
+        conf::min_planner_velocity,
+        conf::max_planner_velocity,
+        false);
 
     // next planned gripper velocity
     // Pass as obs the unconstrained velocities. For execution we will scale them into [min_planner_velocity_, max_planner_velocity_] range
     PlannedVelocities planned_gripper_vel = gripper_planner_->transformToVelocity(currentGripperTransform_, next_plan_training.nextGripperTransform, currentBaseTransform_, 0.0);
     utils::add_vector3(obs_vector, planned_gripper_vel.vel_rel);
-    // PlannedVelocities planned_base_vel = gripper_planner_->transformToVelocity(currentBaseTransform_, next_plan_training.nextBaseTransform, currentBaseTransform_, 0.0);
-    // next relative velocity between gripper and base agent has to modulate -> x, y always zero by definition
-    // gripper_vel_rel_ is the velocity relative to the coordinates of the base, but not relative to the speed of the base
-    // utils::add_vector3(obs_vector, planned_base_vel.vel_rel - planned_gripper_vel.vel_rel);
 
     // planned change in rotation
     utils::add_rotation(obs_vector, planned_gripper_vel.dq, use_euler);
-
-    // next planned relative gripper transform
-    // tf::Transform next_gripper_rel = currentBaseTransform_.inverse() * next_plan_training.nextGripperTransform;
-    // utils::add_vector3(obs_vector, next_gripper_rel.getOrigin());
-    // utils::add_rotation(obs_vector, next_gripper_rel.getRotation(), use_euler);
 
     // relative position of the gripper goal
     tf::Transform rel_gripper_goal = currentBaseTransform_.inverse() * currentGripperGOAL_;
     utils::add_vector3(obs_vector, rel_gripper_goal.getOrigin());
     utils::add_rotation(obs_vector, rel_gripper_goal.getRotation(), use_euler);
 
-    // relative position of the gripper goal to the current gripper pose
-    // tf::Transform eerel_gripper_goal = currentGripperTransform_.inverse() * currentGripperGOAL_;
-    // utils::add_vector3(obs_vector, eerel_gripper_goal.getOrigin());
-    // utils::add_rotation(obs_vector, eerel_gripper_goal.getRotation(), use_euler);
-
-    // relative position of the base goal
-    if (use_base_goal_){
-        tf::Transform rel_base_goal = currentBaseTransform_.inverse() * currentBaseGOAL_;
-        utils::add_vector3(obs_vector, rel_base_goal.getOrigin());
-        utils::add_rotation(obs_vector, rel_base_goal.getRotation(), use_euler);
-    }
-
-    obs_vector.push_back(paused_count_);
+    // legacy to ensure compatibility of the trained checkpoints
+    obs_vector.push_back(0.0);
 
     // current joint positions (8 values)
-    for (int j = 0 ; j < current_joint_values_.size(); j++){
+    for (int j = 0; j < current_joint_values_.size(); j++) {
         obs_vector.push_back(current_joint_values_[j]);
-        // std::cout << joint_names_[j] << ": " << current_joint_values_[j] << std::endl;
     }
 
-    if (obs_vector.size() != get_obs_dim()) { throw std::runtime_error( "get_obs_dim returning wrong value. Pls update."); }
+    if (obs_vector.size() != get_obs_dim()) {
+        throw std::runtime_error("get_obs_dim returning wrong value. Pls update.");
+    }
     return obs_vector;
 }
 
 // NOTE: the other parts of the reward (action regularization) happens in python
-double DynamicSystem_base::calc_reward(
-        bool found_ik,
-        bool pause_gripper,
-        double regularization
-    ){
-    double reward = - penalty_scaling_ * regularization;
-    if (!found_ik){
+double DynamicSystem_base::calc_reward(bool found_ik, double regularization) {
+    double reward = -penalty_scaling_ * regularization;
+    if (!found_ik) {
         reward -= 1.0;
-    }
-    if (pause_gripper){
-        reward -= 0.1;
-        if (paused_count_ > max_allowed_pause_){
-            // also making paused_count_ part of the obs space to keep it markovian
-            reward -= 1000.0;
-        }
     }
     return reward;
 }
 
-
-double DynamicSystem_base::get_dist_to_goal(){
+double DynamicSystem_base::get_dist_to_goal() {
     return (currentGripperGOAL_.getOrigin() - currentGripperTransform_.getOrigin()).length();
 }
 
-double DynamicSystem_base::get_rot_dist_to_goal(){
+double DynamicSystem_base::get_rot_dist_to_goal() {
     return utils::calc_rot_dist(currentGripperTransform_, currentGripperGOAL_);
 }
 
-
-int DynamicSystem_base::calc_done_ret(bool found_ik, int max_allow_ik_errors){
+int DynamicSystem_base::calc_done_ret(bool found_ik, int max_allow_ik_errors) {
     // alternative: get a signal from the gripper trajectory planner that we are at the end
     int done_return = 0;
-    if ((ik_error_count_ > max_allow_ik_errors) || (paused_count_ > max_allowed_pause_)){
+    if (ik_error_count_ > max_allow_ik_errors) {
         done_return = 2;
     } else if (!found_ik) {
         done_return = 0;
     } else {
-        // distance to goal
         double dist_to_goal = get_dist_to_goal();
         bool is_close = (dist_to_goal < success_thres_dist_);
 
-        if (is_close){
+        if (is_close) {
             // distance to target rotation: https://math.stackexchange.com/questions/90081/quaternion-distance
             double rot_distance = utils::calc_rot_dist(currentGripperTransform_, currentGripperGOAL_);
             // more exact alternative; seems to have some precision problems, returning nan if slightly above 1
@@ -664,66 +564,50 @@ int DynamicSystem_base::calc_done_ret(bool found_ik, int max_allow_ik_errors){
         }
         done_return = is_close ? 1 : 0;
     }
-    ROS_INFO_COND((done_return != 0) && (real_execution_ != "sim"), "Episode finished with done_return %d and %d ik fails", done_return, ik_error_count_);
+    ROS_INFO_COND((done_return != 0) && (!world_->is_analytical()), "Episode finished with done_return %d and %d ik fails", done_return, ik_error_count_);
     return done_return;
 }
 
-
-bool DynamicSystem_base::find_ik(const Eigen::Isometry3d &desiredState, const tf::Transform &desiredGripperTfWorld){
+bool DynamicSystem_base::find_ik(const Eigen::Isometry3d &desiredState, const tf::Transform &desiredGripperTfWorld) {
     // kinematics::KinematicsQueryOptions ik_options;
     // ik_options.return_approximate_solution = true;
-    if (perform_collision_check_){
+    if (perform_collision_check_) {
         bool success = kinematic_state_->setFromIK(joint_model_group_, desiredState, 0.05, constraint_callback_fn_);
-        if (!success){
+        if (!success) {
             // in case of a collision keep the current position
             // can apply this to any case of ik failure as moveit does not seem to set it to the next best solution anyway
             kinematic_state_->setJointGroupPositions(robo_config_.joint_model_group_name, current_joint_values_);
         }
         return success;
     } else {
+        // return kinematic_state_->setFromIK(joint_model_group_, desiredState, 5, 0.1, moveit::core::GroupStateValidityCallbackFn(), ik_options);
         return kinematic_state_->setFromIK(joint_model_group_, desiredState, 0.05);
     }
 }
 
-
-geometry_msgs::Twist DynamicSystem_base::calc_desired_base_transform(
-        std::vector<double> &base_actions,
-        tf::Vector3 planned_base_vel_rel,
-        tf::Quaternion planned_base_q,
-        tf::Vector3 planned_gripper_vel_rel,
-        tf::Transform &desiredBaseTransform,
-        double transition_noise_base,
-        double &regularization
-    ){
+geometry_msgs::Twist DynamicSystem_base::calc_desired_base_transform(std::vector<double> &base_actions,
+                                                                     tf::Vector3 planned_base_vel_rel,
+                                                                     tf::Quaternion planned_base_q,
+                                                                     tf::Vector3 planned_gripper_vel_rel,
+                                                                     tf::Transform &desiredBaseTransform,
+                                                                     double transition_noise_base,
+                                                                     double &regularization,
+                                                                     double const &last_dt,
+                                                                     const tf::Transform &desiredGripperTransform) {
     planned_base_vel_rel *= slow_down_factor_;
     planned_gripper_vel_rel *= slow_down_factor_;
 
     // a) calculate the new desire baseTransform
-    // planner actions are based on last_dt_, RL actions are for a unit time -> scale down RL actions
-    double base_rot_rng_t = last_dt_ * robo_config_.base_rot_rng;
-    double base_vel_rng_t = last_dt_ * robo_config_.base_vel_rng;
+    // planner actions are based on last_dt, RL actions are for a unit time -> scale down RL actions
+    double base_rot_rng_t = last_dt * robo_config_.base_rot_rng;
+    double base_vel_rng_t = last_dt * robo_config_.base_vel_rng;
 
     // Modulate planned base velocity and set it:
-    // i) calculate new (modulated) relative speed of the base to the gripper
+    // i) derive actions from agent's actions
     tf::Vector3 base_vel_rel;
     double base_rotation = 0.0;
 
-    if (strategy_ == "modulate"){
-        double modulation_lambda1 = 2.0 * base_actions[1];
-        double modulation_alpha = base_actions[2];
-        double modulation_lambda2 = 1.0;
-
-        Eigen::Vector2f relative_gripper_base_speed;
-        relative_gripper_base_speed << planned_base_vel_rel.x() - planned_gripper_vel_rel.x(), planned_base_vel_rel.y() - planned_gripper_vel_rel.y();
-        modulation::compModulation(modulation_alpha, modulation_lambda1, modulation_lambda2, relative_gripper_base_speed);
-
-        base_vel_rel.setValue(planned_gripper_vel_rel.x() + relative_gripper_base_speed(0),
-                              planned_gripper_vel_rel.y() + relative_gripper_base_speed(1),
-                              0.0);
-        base_rotation = base_rot_rng_t * base_actions[0];
-
-        regularization += pow(base_actions[0], 2.0) + pow(modulation_lambda1 - 1.0, 2.0);
-    } else if (strategy_ == "modulate_ellipse"){
+    if (strategy_ == "modulate_ellipse") {
         // Need velocities in world frame
         tf::Transform base_no_trans = currentBaseTransform_;
         base_no_trans.setOrigin(tf::Vector3(0.0, 0.0, 0.0));
@@ -736,8 +620,8 @@ geometry_msgs::Twist DynamicSystem_base::calc_desired_base_transform(
         float base_rot_speed = 0.0001;
         combined_speed << gripper_vel_wf.x(), gripper_vel_wf.y(), 0.0, 0.0, 0.0, 0.0, 0.0,
                           base_vel_wf.x(), base_vel_wf.y(), 0.0, 0.0, 0.0, base_rot_speed, 0.0;
-        combined_pose << next_plan_.nextGripperTransform.getOrigin().x(),next_plan_.nextGripperTransform.getOrigin().y(), next_plan_.nextGripperTransform.getOrigin().z(),
-                         next_plan_.nextGripperTransform.getRotation().x(),next_plan_.nextGripperTransform.getRotation().y(),next_plan_.nextGripperTransform.getRotation().z(),next_plan_.nextGripperTransform.getRotation().w(),
+        combined_pose << desiredGripperTransform.getOrigin().x(),desiredGripperTransform.getOrigin().y(), desiredGripperTransform.getOrigin().z(),
+                         desiredGripperTransform.getRotation().x(),desiredGripperTransform.getRotation().y(),desiredGripperTransform.getRotation().z(),desiredGripperTransform.getRotation().w(),
                          currentBaseTransform_.getOrigin().x(),currentBaseTransform_.getOrigin().y(), currentBaseTransform_.getOrigin().z(),
                          currentBaseTransform_.getRotation().x(),currentBaseTransform_.getRotation().y(),currentBaseTransform_.getRotation().z(),currentBaseTransform_.getRotation().w();
         modulation_.run(combined_pose, combined_speed);
@@ -785,7 +669,7 @@ geometry_msgs::Twist DynamicSystem_base::calc_desired_base_transform(
 
         regularization += pow(base_actions[0], 2.0) + pow(base_actions[1], 2.0) + pow(base_actions[2], 2.0);
     } else {
-        throw std::runtime_error( "Unimplemented strategy");
+        throw std::runtime_error("Unimplemented strategy");
     }
 
     // ensure the velocity limits are still satisfied
@@ -793,7 +677,7 @@ geometry_msgs::Twist DynamicSystem_base::calc_desired_base_transform(
     // ensure z component is 0 (relevant for 'hack' in unmodulated strategy)
     base_vel_rel.setZ(0.0);
 
-    if (transition_noise_base > 0.0001){
+    if (transition_noise_base > 0.0001) {
         tf::Vector3 noise_vec = tf::Vector3(rng_.gaussian(0.0, transition_noise_base), rng_.gaussian(0.0, transition_noise_base), 0.0);
         base_vel_rel += noise_vec;
         base_rotation += rng_.gaussian(0.0, transition_noise_base);
@@ -814,8 +698,8 @@ geometry_msgs::Twist DynamicSystem_base::calc_desired_base_transform(
 
     // construct base command: scale back up to be per unit time
     double cmd_scaling = 1.0;
-    if (last_dt_ > 0.001){
-        cmd_scaling /= last_dt_;
+    if (last_dt > 0.001) {
+        cmd_scaling /= last_dt;
     }
 
     tf::Transform relative_desired_pose = currentBaseTransform_.inverse() * desiredBaseTransform;
@@ -839,10 +723,10 @@ geometry_msgs::Twist DynamicSystem_base::calc_desired_base_transform(
     return base_cmd_rel;
 }
 
-double DynamicSystem_base::update_time(bool pause_gripper){
+double DynamicSystem_base::update_time(bool pause_gripper) {
     double dt;
-    if ((real_execution_ != "sim")){
-         dt = (ros::Time::now().toSec() - time_);
+    if ((!world_->is_analytical())) {
+        dt = (ros::Time::now().toSec() - time_);
         // assume we call it in exactly the expected frequency?
         // dt = rate_.expectedCycleTime().toSec();
     } else {
@@ -850,94 +734,98 @@ double DynamicSystem_base::update_time(bool pause_gripper){
     }
 
     time_ += dt;
-    if (!pause_gripper){
+    if (!pause_gripper) {
         time_planner_ += dt;
     }
     // ROS_INFO("t-: %f, tp: %f, dt: %f, sp: %f", time_ - reset_time_, time_planner_, dt, start_pause_);
-
     return dt;
 }
 
-bool DynamicSystem_base::in_start_pause(){
-    return (time_ - reset_time_) < start_pause_;
+bool DynamicSystem_base::in_start_pause() {
+    return (time_ - set_goal_time_) < start_pause_;
 }
 
-std::vector<double> DynamicSystem_base::step(
-        int max_allow_ik_errors,
-        bool pause_gripper,
-        std::vector<double> base_actions,
-        double transition_noise_ee,
-        double transition_noise_base)
-    {
-    pathPoint path_point;
-    pause_gripper |= in_start_pause();
+std::vector<double> DynamicSystem_base::step(int max_allow_ik_errors,
+                                             std::vector<double> base_actions,
+                                             double transition_noise_ee,
+                                             double transition_noise_base) {
+    PathPoint path_point;
+    bool pause_gripper = in_start_pause();
 
     // utils::print_t(currentGripperTransform_, "currentGripperTransform_");
-    // utils::print_t(next_plan_.nextGripperTransform, "next_plan_.nextGripperTransform");
+    // utils::print_t(next_plan.nextGripperTransform, "next_plan.nextGripperTransform");
 
-    path_point.planned_gripper_x = next_plan_.nextGripperTransform.getOrigin().x();
-    path_point.planned_gripper_y = next_plan_.nextGripperTransform.getOrigin().y();
-    path_point.planned_gripper_z = next_plan_.nextGripperTransform.getOrigin().z();
-    tf::Matrix3x3(next_plan_.nextGripperTransform.getRotation()).getRPY(path_point.planned_gripper_R, path_point.planned_gripper_P, path_point.planned_gripper_Y);
-    path_point.planned_base_x = next_plan_.nextBaseTransform.getOrigin().x();
-    path_point.planned_base_y = next_plan_.nextBaseTransform.getOrigin().y();
-    double roll_,  pitch_;
-    tf::Matrix3x3(currentBaseTransform_.getRotation()).getRPY(roll_, pitch_, path_point.planned_base_rot);
-
-    int action_repeat = (real_execution_ == "sim") ? 1 : (time_step_real_exec_ / rate_.expectedCycleTime().toSec());
-    // std::cout << "action_repeat: " << action_repeat << std::endl;
+    int action_repeat = (world_->is_analytical()) ? 1 : (time_step_real_exec_ / rate_.expectedCycleTime().toSec());
 
     tf::Transform desiredGripperTransform, desiredBaseTransform, desired_gripper_pose_rel;
-    PlannedVelocities planned_gripper_vel, planned_base_vel;
+    GripperPlan next_plan;
     geometry_msgs::Twist base_cmd_rel;
     bool found_ik;
     bool collision = false;
-    double regularization = 0.0;
+    double regularization = 0.0, last_dt;
 
-    for (int i=0; i < action_repeat; i++) {
-        if (transition_noise_ee > 0.0001){
+    for (int i = 0; i < action_repeat; i++) {
+        // plan velocities to be modulated and set in next step
+        last_dt = update_time(pause_gripper);
+        next_plan = gripper_planner_->get_next_velocities(time_planner_ / slow_down_factor_,
+                                                          last_dt / slow_down_factor_,
+                                                          currentBaseTransform_,
+                                                          currentGripperTransform_,
+                                                          planned_base_vel_.vel_world,
+                                                          planned_gripper_vel_.vel_world,
+                                                          planned_gripper_vel_.dq,
+                                                          conf::min_planner_velocity,
+                                                          conf::max_planner_velocity,
+                                                          !pause_gripper);
+        if (transition_noise_ee > 0.0001) {
             tf::Vector3 noise_vec = tf::Vector3(rng_.gaussian(0.0, transition_noise_ee), rng_.gaussian(0.0, transition_noise_ee), rng_.gaussian(0.0, transition_noise_ee));
-            next_plan_.nextGripperTransform.setOrigin(next_plan_.nextGripperTransform.getOrigin() + noise_vec);
+            next_plan.nextGripperTransform.setOrigin(next_plan.nextGripperTransform.getOrigin() + noise_vec);
+        }
+        if (i == 0) {
+            utils::pathPoint_insert_transform(path_point, "planned_gripper", next_plan.nextGripperTransform);
+            utils::pathPoint_insert_transform(path_point, "planned_base", next_plan.nextBaseTransform, true);
         }
 
         // constrain by base_vel_rng, not gripper planner max vel so that we could theoretically still catch up
         // must come before we update the currentGripperTransform_
         // even if pause_gripper, still calculate the originally planned one, because with relvel we still want to move the base relative to this originally planned speed(?)
-        planned_gripper_vel = gripper_planner_->transformToVelocity(
-            currentGripperTransform_,
-            next_plan_.nextGripperTransform,
-            currentBaseTransform_,
-            robo_config_.base_vel_rng);
-        planned_base_vel = gripper_planner_->transformToVelocity(
-            currentBaseTransform_,
-            next_plan_.nextBaseTransform,
-            currentBaseTransform_,
-            robo_config_.base_vel_rng);
-        // utils::print_vector3(planned_gripper_vel.vel_world, "planned_gripper_vel.vel_world");
-        // utils::print_vector3(planned_base_vel.vel_world, "planned_base_vel.vel_world");
+        planned_gripper_vel_ = gripper_planner_->transformToVelocity(currentGripperTransform_,
+                                                                     next_plan.nextGripperTransform,
+                                                                     currentBaseTransform_,
+                                                                     robo_config_.base_vel_rng);
+        planned_base_vel_ = gripper_planner_->transformToVelocity(currentBaseTransform_,
+                                                                  next_plan.nextBaseTransform,
+                                                                  currentBaseTransform_,
+                                                                  robo_config_.base_vel_rng);
 
-        if (pause_gripper){
-            next_plan_ = gripper_planner_->get_prev_plan();
-            // with action_repeat pause_gripper doesn't work as condition anymore
-            if (!in_start_pause()){
-                paused_count_ ++;
-            }
+        if (pause_gripper) {
+            next_plan = gripper_planner_->get_prev_plan();
         }
         // set new gripper pose (optimistically assume it will be achieved, updating it again after trying to execute the ik)
-        desiredGripperTransform = next_plan_.nextGripperTransform;
+        desiredGripperTransform = next_plan.nextGripperTransform;
 
         // apply the RL actions to the base, updating desiredBaseTransform while holding the velocity constraints
-        base_cmd_rel = calc_desired_base_transform(base_actions, planned_base_vel.vel_rel, next_plan_.nextBaseTransform.getRotation(), planned_gripper_vel.vel_rel, desiredBaseTransform, transition_noise_base, regularization);
-        // std::cout << "base_cmd_rel.linear.x: " << base_cmd_rel.linear.x << " , base_cmd_rel.linear.y: " << base_cmd_rel.linear.y << " , base_cmd_rel.angular.z: " << base_cmd_rel.angular.z << std::endl;
+        base_cmd_rel = calc_desired_base_transform(base_actions,
+                                                   planned_base_vel_.vel_rel,
+                                                   next_plan.nextBaseTransform.getRotation(),
+                                                   planned_gripper_vel_.vel_rel,
+                                                   desiredBaseTransform,
+                                                   transition_noise_base,
+                                                   regularization,
+                                                   last_dt,
+                                                   desiredGripperTransform);
+        // std::cout << "base_cmd_rel.linear.x: " << base_cmd_rel.linear.x << " , base_cmd_rel.linear.y: " << base_cmd_rel.linear.y << " , base_cmd_rel.angular.z: " <<
+        // base_cmd_rel.angular.z << std::endl;
 
         // Update relative positions of the base, gripper and gripper_goal to the base (optimistically assume it will be achieved, updating it again after trying to execute the ik)
         desired_gripper_pose_rel = desiredBaseTransform.inverse() * desiredGripperTransform;
-//        if (real_execution_ == "sim"){
-//            desired_gripper_pose_rel = desiredBaseTransform.inverse() * desiredGripperTransform;
-//        } else {
-//            desired_gripper_pose_rel = currentBaseTransform_.inverse() * desiredGripperTransform;
-//        }
-        gripper_visualizer_.publish(create_vel_marker(currentGripperTransform_, 20 * (desiredGripperTransform.getOrigin() - currentGripperTransform_.getOrigin()), "gripper_vel", "cyan", 0));
+        //if (world_->is_analytical()){
+        //    desired_gripper_pose_rel = desiredBaseTransform.inverse() * desiredGripperTransform;
+        //} else {
+        //    desired_gripper_pose_rel = currentBaseTransform_.inverse() * desiredGripperTransform;
+        //}
+        gripper_visualizer_.publish(
+            create_vel_marker(currentGripperTransform_, 20 * (desiredGripperTransform.getOrigin() - currentGripperTransform_.getOrigin()), "gripper_vel", "cyan", 0));
         gripper_visualizer_.publish(create_vel_marker(currentBaseTransform_, 20 * (desiredBaseTransform.getOrigin() - currentBaseTransform_.getOrigin()), "base_vel", "cyan", 0));
 
         // Perform IK checks
@@ -946,25 +834,23 @@ std::vector<double> DynamicSystem_base::step(
         const Eigen::Isometry3d &desiredState = state;
         found_ik = find_ik(desiredState, desiredGripperTransform);
         kinematic_state_->copyJointGroupPositions(joint_model_group_, current_joint_values_);
-        // std::cout << "found ik: " << found_ik << std::endl;
 
-        if ((real_execution_ != "sim")){
+        if ((!world_->is_analytical())) {
             rate_.sleep();
             send_arm_command(current_joint_values_, 0.1);
             cmd_base_vel_pub_.publish(base_cmd_rel);
         };
 
-        if (!found_ik){
+        if (!found_ik) {
             ik_error_count_++;
-            // add_fail_state_marker();
             // planning_scene_monitor_->getPlanningScene()->getCurrentState().copyJointGroupPositions(joint_model_group_, current_joint_values_);
         }
         // update state to what we actually achieve
         // a) base: without execution we'll always be at the next base transform
-        if (real_execution_ == "sim"){
+        if (world_->is_analytical()) {
             currentBaseTransform_ = desiredBaseTransform;
         } else {
-            currentBaseTransform_ = get_base_transform_world();
+            currentBaseTransform_ = world_->get_base_transform_world();
         }
         // b) gripper: update kinematic state from planning scene and run forward kinematics to get achieved currentGripperTransform_
         const Eigen::Affine3d &end_effector_state_rel = kinematic_state_->getGlobalLinkTransform(robo_config_.global_link_transform);
@@ -977,66 +863,38 @@ std::vector<double> DynamicSystem_base::step(
         //     collision |= check_scene_collisions();
         // }
 
-        // Add the current robot state to the visualization trajectory (not actually visualizing)
-        add_trajectory_point(false, found_ik);
-
-        // plan velocities to be modulated and set in next step
-        last_dt_ = update_time(pause_gripper);
-        next_plan_ = gripper_planner_->get_next_velocities(
-            time_planner_ / slow_down_factor_,
-            last_dt_ / slow_down_factor_,
-            currentBaseTransform_,
-            currentGripperTransform_,
-            planned_base_vel.vel_world,
-            planned_gripper_vel.vel_world,
-            planned_gripper_vel.dq,
-            !pause_gripper
-        );
+        add_trajectory_point(next_plan, found_ik);
     }
 
     // reward and check if episode has finished -> Distance gripper to goal
     // found_ik &= get_arm_success();
-    double reward = calc_reward(found_ik, pause_gripper, regularization);
+    double reward = calc_reward(found_ik, regularization);
     int done_ret = calc_done_ret(found_ik, max_allow_ik_errors);
 
     // build the observation return
-    std::vector<double> obs_vector = build_obs_vector(planned_base_vel.vel_world, planned_gripper_vel.vel_world, planned_gripper_vel.dq);
+    std::vector<double> obs_vector = build_obs_vector(planned_base_vel_.vel_world, planned_gripper_vel_.vel_world, planned_gripper_vel_.dq);
     obs_vector.push_back(reward);
     obs_vector.push_back(done_ret);
     obs_vector.push_back(ik_error_count_);
 
     // visualisation etc
-    path_point.base_x = currentBaseTransform_.getOrigin().x();
-    path_point.base_y = currentBaseTransform_.getOrigin().y();
-    tf::Matrix3x3(currentBaseTransform_.getRotation()).getRPY(roll_, pitch_, path_point.base_rot);
-    path_point.desired_base_x = desiredBaseTransform.getOrigin().x();
-    path_point.desired_base_y = desiredBaseTransform.getOrigin().y();
-    tf::Matrix3x3(desiredBaseTransform.getRotation()).getRPY(roll_, pitch_, path_point.desired_base_rot);
-    path_point.base_cmd_linear_x = base_cmd_rel.linear.x;
-    path_point.base_cmd_linear_y = base_cmd_rel.linear.y;
-    path_point.base_cmd_angular_z = base_cmd_rel.angular.z;
-
-    path_point.gripper_x = currentGripperTransform_.getOrigin().x();
-    path_point.gripper_y = currentGripperTransform_.getOrigin().y();
-    path_point.gripper_z = currentGripperTransform_.getOrigin().z();
-    tf::Matrix3x3(currentGripperTransform_.getRotation()).getRPY(path_point.gripper_R, path_point.gripper_P, path_point.gripper_Y);
-    path_point.gripper_rel_x = rel_gripper_pose_.getOrigin().x();
-    path_point.gripper_rel_y = rel_gripper_pose_.getOrigin().y();
-    path_point.gripper_rel_z = rel_gripper_pose_.getOrigin().z();
-    tf::Matrix3x3(rel_gripper_pose_.getRotation()).getRPY(path_point.gripper_rel_R, path_point.gripper_rel_P, path_point.gripper_rel_Y);
-    path_point.desired_gripper_rel_x = desired_gripper_pose_rel.getOrigin().x();
-    path_point.desired_gripper_rel_y = desired_gripper_pose_rel.getOrigin().y();
-    path_point.desired_gripper_rel_z = desired_gripper_pose_rel.getOrigin().z();
-    tf::Matrix3x3(desired_gripper_pose_rel.getRotation()).getRPY(path_point.desired_gripper_rel_R, path_point.desired_gripper_rel_P, path_point.desired_gripper_rel_Y);
-    path_point.ik_fail = !found_ik;
-    path_point.dt = last_dt_;
-    path_point.collision = collision;
+    utils::pathPoint_insert_transform(path_point, "base", currentBaseTransform_, true);
+    utils::pathPoint_insert_transform(path_point, "desired_base", desiredBaseTransform, true);
+    path_point["base_cmd_linear_x"] = base_cmd_rel.linear.x;
+    path_point["base_cmd_linear_y"] = base_cmd_rel.linear.y;
+    path_point["base_cmd_angular_z"] = base_cmd_rel.angular.z;
+    utils::pathPoint_insert_transform(path_point, "gripper", currentGripperTransform_);
+    utils::pathPoint_insert_transform(path_point, "gripper_rel", rel_gripper_pose_);
+    utils::pathPoint_insert_transform(path_point, "desired_gripper_rel", desired_gripper_pose_rel);
+    path_point["ik_fail"] = !found_ik;
+    path_point["dt"] = last_dt;
+    path_point["collision"] = collision;
     pathPoints_.push_back(path_point);
 
     return obs_vector;
 }
 
-std_msgs::ColorRGBA DynamicSystem_base::get_ik_color(double alpha = 1.0){
+std_msgs::ColorRGBA DynamicSystem_base::get_ik_color(double alpha = 1.0) {
     std_msgs::ColorRGBA c;
     // more and more red from 0 to 100
     double ik_count_capped = std::min((double)ik_error_count_, 100.0);
@@ -1047,19 +905,19 @@ std_msgs::ColorRGBA DynamicSystem_base::get_ik_color(double alpha = 1.0){
     return c;
 }
 
-void DynamicSystem_base::add_trajectory_point(bool vis_gripper, bool found_ik){
-    if (!verbose_){
+void DynamicSystem_base::add_trajectory_point(const GripperPlan &next_plan, bool found_ik) {
+    if (!verbose_) {
         return;
     }
     // plans
-    double nthpoint = (real_execution_ == "sim") ? (1.0 / time_step_train_) : (1.0 / (time_step_real_exec_));
-    if (((pathPoints_.size() % (int)nthpoint) == 0) || !found_ik){
+    double nthpoint = (world_->is_analytical()) ? (1.0 / time_step_train_) : (1.0 / (time_step_real_exec_));
+    if (((pathPoints_.size() % (int)nthpoint) == 0) || !found_ik) {
         int mid = 5000 * marker_counter_ + gripper_plan_marker_.markers.size();
-        visualization_msgs::Marker marker = utils::marker_from_transform(next_plan_.nextGripperTransform, "gripper_plan", get_ik_color(0.5), mid, robo_config_.frame_id);
+        visualization_msgs::Marker marker = utils::marker_from_transform(next_plan.nextGripperTransform, "gripper_plan", get_ik_color(0.5), mid, robo_config_.frame_id);
         gripper_visualizer_.publish(marker);
         gripper_plan_marker_.markers.push_back(marker);
 
-        visualization_msgs::Marker base_plan_marker = utils::marker_from_transform(next_plan_.nextBaseTransform, "base_plan", "orange", 0.5, mid, robo_config_.frame_id);
+        visualization_msgs::Marker base_plan_marker = utils::marker_from_transform(next_plan.nextBaseTransform, "base_plan", "orange", 0.5, mid, robo_config_.frame_id);
         gripper_visualizer_.publish(base_plan_marker);
 
         visualization_msgs::Marker base_marker = utils::marker_from_transform(currentBaseTransform_, "base_actual", "yellow", 0.5, mid, robo_config_.frame_id);
@@ -1067,14 +925,17 @@ void DynamicSystem_base::add_trajectory_point(bool vis_gripper, bool found_ik){
     };
 
     // current robot state
-    nthpoint = (real_execution_ == "sim") ? 1 : (time_step_train_ / (time_step_real_exec_));
-    if ((pathPoints_.size() % (int)nthpoint) == 0){
+    nthpoint = (world_->is_analytical()) ? 1 : (time_step_train_ / (time_step_real_exec_));
+    if ((pathPoints_.size() % (int)nthpoint) == 0) {
         moveit_msgs::DisplayRobotState drs;
         robot_state::RobotState state_copy(*kinematic_state_);
-        state_copy.setVariablePosition ("world_joint/x", currentBaseTransform_.getOrigin().x());
-        state_copy.setVariablePosition ("world_joint/y", currentBaseTransform_.getOrigin().y());
-        state_copy.setVariablePosition ("world_joint/theta", currentBaseTransform_.getRotation().getAngle() * currentBaseTransform_.getRotation().getAxis().getZ());
+        state_copy.setVariablePosition("world_joint/x", currentBaseTransform_.getOrigin().x());
+        state_copy.setVariablePosition("world_joint/y", currentBaseTransform_.getOrigin().y());
+        state_copy.setVariablePosition("world_joint/theta", currentBaseTransform_.getRotation().getAngle() * currentBaseTransform_.getRotation().getAxis().getZ());
         robot_state::robotStateToRobotStateMsg(state_copy, drs.state);
+        // rviz won't accept these in map frame for some reason
+        // drs.state.joint_state.header.frame_id = "map";
+        // drs.state.multi_dof_joint_state.header.frame_id = "map";
         robstate_visualizer_.publish(drs);
     }
     // trajectory
@@ -1084,28 +945,10 @@ void DynamicSystem_base::add_trajectory_point(bool vis_gripper, bool found_ik){
     fullBodyTraj_msg.multi_dof_joint_trajectory.joint_names.push_back("world_joint");
     // arm trajectory point
     trajectory_msgs::JointTrajectoryPoint jointPoint;
-    for (int j = 0 ; j < joint_names_.size(); j++){
+    for (int j = 0; j < joint_names_.size(); j++) {
         fullBodyTraj_msg.joint_trajectory.joint_names.push_back(joint_names_[j]);
         jointPoint.positions.push_back(current_joint_values_[j]);
         // std::cout << joint_names_[j] << ": " << current_joint_values_[j] << std::endl;
-    }
-    // gripper
-    if (vis_gripper && !robo_config_.eef_joint_names.empty()){
-        if (real_execution_ != "sim"){
-            // TODO: DOES THIS RETURN THE RIGHT STATE FOR THE GRIPPER?
-            moveit::core::RobotState current_state = planning_scene_monitor_->getPlanningScene()->getCurrentState();
-            // std::vector<double> eef_joint_values;
-            // current_state->copyJointGroupPositions(robo_config_.eef_joint_names, eef_joint_values);
-
-            for (int j = 0 ; j < robo_config_.eef_joint_names.size(); j++)
-            {
-                fullBodyTraj_msg.joint_trajectory.joint_names.push_back(robo_config_.eef_joint_names[j]);
-                const double* pos = current_state.getJointPositions(robo_config_.eef_joint_names[j]);
-                double poss = *pos;
-                jointPoint.positions.push_back(poss);
-                // jointPoint.positions.push_back(eef_joint_values[j]);
-            }
-        }
     }
     fullBodyTraj_msg.joint_trajectory.points.push_back(jointPoint);
     // base
@@ -1119,37 +962,33 @@ void DynamicSystem_base::add_trajectory_point(bool vis_gripper, bool found_ik){
     display_trajectory_.trajectory.push_back(fullBodyTraj_msg);
 }
 
-
-std::vector<pathPoint> DynamicSystem_base::visualize_robot_pose(std::string logfile){
+std::vector<PathPoint> DynamicSystem_base::visualize_robot_pose(std::string logfile) {
     // Visualize the current gripper goal in color of
     visualization_msgs::Marker goal_marker = utils::marker_from_transform(currentGripperGOAL_, "gripper_goal", "blue", 1.0, marker_counter_, robo_config_.frame_id);
 
     // publish messages
     traj_visualizer_.publish(display_trajectory_);
     // gripper_visualizer_.publish(goal_marker);
-    // state_visualizer_.publish(start_state_marker_);
-    // gripper_plan_visualizer_.publish(gripper_plan_marker_);
 
     // Store in rosbag
-    if (logfile != ""){
+    if (logfile != "") {
         logfile = logfile + "_nik" + std::to_string(ik_error_count_) + ".bag";
         ros::Time timeStamp = ros::Time::now();
-        if (timeStamp.toNSec() == 0) timeStamp = ros::TIME_MIN;
+        if (timeStamp.toNSec() == 0)
+            timeStamp = ros::TIME_MIN;
 
         rosbag::Bag bag;
         bag.open(logfile, rosbag::bagmode::Write);
         bag.write("modulation_rl_ik/traj_visualizer", timeStamp, display_trajectory_);
         bag.write("modulation_rl_ik/gripper_goal_visualizer", timeStamp, goal_marker);
         bag.write("modulation_rl_ik/gripper_plan_visualizer", timeStamp, gripper_plan_marker_);
-        // bag.write("modulation_rl_ik/state_visualizer", timeStamp, start_state_marker_);
-        //bag.write("fail_state_visualizer", timeStamp, fail_state_marker_);
         bag.close();
     }
 
     return pathPoints_;
 }
 
-void DynamicSystem_base::add_goal_marker_tf(tf::Transform transfm, int marker_id, std::string color){
+void DynamicSystem_base::add_goal_marker_tf(tf::Transform transfm, int marker_id, std::string color) {
     std::vector<double> pos;
     pos.push_back(transfm.getOrigin().x());
     pos.push_back(transfm.getOrigin().y());
@@ -1163,71 +1002,44 @@ void DynamicSystem_base::add_goal_marker_tf(tf::Transform transfm, int marker_id
 
 // currently won't be added to the rosbag. But the task will always set them at env initialization. So always visible
 // pos: [x, y, z, R, P, Y] or [x, y, z, Qx, Qy, Qz, Qw]
-void DynamicSystem_base::add_goal_marker(std::vector<double> pos, int marker_id, std::string color){
+void DynamicSystem_base::add_goal_marker(std::vector<double> pos, int marker_id, std::string color) {
     tf::Transform t = parse_goal(pos);
-    std_msgs::ColorRGBA c = utils::get_color_msg(color, 0.5);
+    std_msgs::ColorRGBA c = utils::get_color_msg(color, 1.0);
     visualization_msgs::Marker marker = utils::marker_from_transform(t, "gripper_goal", c, marker_id, robo_config_.frame_id);
     gripper_visualizer_.publish(marker);
 }
 
 // pybind will complain if pure virtual here
-void DynamicSystem_base::open_gripper(double position){
+void DynamicSystem_base::open_gripper(double position, bool wait_for_result) {
     throw std::runtime_error("NOT IMPLEMENTED YET");
 }
 
-void DynamicSystem_base::close_gripper(double position){
+void DynamicSystem_base::close_gripper(double position, bool wait_for_result) {
     throw std::runtime_error("NOT IMPLEMENTED YET");
 }
 
-tf::Transform DynamicSystem_base::get_base_transform_world(){
-    if (real_execution_ == "gazebo"){
-        gazebo_msgs::GetModelState getmodelstate;
-        getmodelstate.request.model_name = (std::string)robo_config_.name;
-        getmodelstate.request.relative_entity_name = (std::string)"world";
-
-        if (!get_model_state_client_.call(getmodelstate)) {
-            ROS_INFO("get_model_state_client_ failed. Returning currentBaseTransform_");
-            return currentBaseTransform_;
-        } else {
-            tf::Transform newBaseTransform;
-            newBaseTransform.setOrigin(tf::Vector3(getmodelstate.response.pose.position.x, getmodelstate.response.pose.position.y, getmodelstate.response.pose.position.z));
-            newBaseTransform.setRotation(tf::Quaternion(getmodelstate.response.pose.orientation.x, getmodelstate.response.pose.orientation.y, getmodelstate.response.pose.orientation.z, getmodelstate.response.pose.orientation.w));
-
-            // utils::print_vector3(newBaseTransform.getOrigin(), "newBaseTransformO");
-            return newBaseTransform;
-        }
-    } else if (real_execution_ == "world"){
-		tf::StampedTransform newBaseTransform;
-		listener_.lookupTransform(robo_config_.frame_id, "base_footprint", ros::Time(0), newBaseTransform);
-		return tf::Transform(newBaseTransform);
-    } else {
-        throw std::runtime_error("Not implemented for this real_execution_ value");
-    }
-}
-
-void DynamicSystem_base::update_current_gripper_from_world(){
-    if ((real_execution_ != "sim")){
+void DynamicSystem_base::update_current_gripper_from_world() {
+    if ((!world_->is_analytical())) {
         // update kinematic_state_ and current_joint_values_
         moveit_msgs::GetPlanningScene scene_srv1;
         moveit_msgs::PlanningScene currentScene;
-        scene_srv1.request.components.components = 2;// moveit_msgs::PlanningSceneComponents::ROBOT_STATE;
-        if(!client_get_scene_.call(scene_srv1)){
+        scene_srv1.request.components.components = 2;  // moveit_msgs::PlanningSceneComponents::ROBOT_STATE;
+        if (!client_get_scene_.call(scene_srv1)) {
             ROS_WARN("Failed to call service /get_planning_scene");
         }
         planning_scene_->setPlanningSceneDiffMsg(scene_srv1.response.scene);
 
-//        planning_scene::PlanningScenePtr scene = planning_scene_monitor_->getPlanningScene();
+        // planning_scene::PlanningScenePtr scene = planning_scene_monitor_->getPlanningScene();
         robot_state::RobotState robstate = planning_scene_->getCurrentState();
         // const std::vector< std::string > &all_joint_names = kinematic_model->getJointModelNames();
         // const std::vector< std::string > &all_joint_names = robstate.getVariableNames();
-        for ( int j=0; j < joint_names_.size(); j++ ){
+        for (int j = 0; j < joint_names_.size(); j++) {
             const std::string name = joint_names_[j];
             const double curr_value = kinematic_state_->getJointPositions(name)[0];
             const double actual_value = robstate.getJointPositions(name)[0];
 
             // avoid adding joints that are not defined in other places (e.g. rviz)
-            if (std::abs(curr_value - actual_value) > 0.0000001){
-                // std::cout << name << ", " << curr_value << ", " << actual_value << ", " << actual_value - curr_value << std::endl;
+            if (std::abs(curr_value - actual_value) > 0.0000001) {
                 kinematic_state_->setJointPositions(name, &actual_value);
             }
         }
@@ -1236,82 +1048,24 @@ void DynamicSystem_base::update_current_gripper_from_world(){
 
     const Eigen::Affine3d &end_effector_state_rel = kinematic_state_->getGlobalLinkTransform(robo_config_.global_link_transform);
     tf::transformEigenToTF(end_effector_state_rel, rel_gripper_pose_);
-    // utils::print_t(currentGripperTransform_, "currentGripperTransform_ pre");
     currentGripperTransform_ = currentBaseTransform_ * rel_gripper_pose_;
-    // utils::print_t(currentGripperTransform_, "currentGripperTransform_ post");
 }
 
-
-
-void DynamicSystem_base::set_gazebo_model_state(std::string model_name, tf::Transform world_transform){
-    gazebo_msgs::ModelState modelstate;
-    modelstate.model_name = model_name;
-    modelstate.reference_frame = "world";
-    modelstate.pose.position.x = world_transform.getOrigin().x();
-    modelstate.pose.position.y = world_transform.getOrigin().y();
-    modelstate.pose.position.z = world_transform.getOrigin().z();
-    modelstate.pose.orientation.x = world_transform.getRotation().x();
-    modelstate.pose.orientation.y = world_transform.getRotation().y();
-    modelstate.pose.orientation.z = world_transform.getRotation().z();
-    modelstate.pose.orientation.w = world_transform.getRotation().w();
-
-    gazebo_msgs::SetModelState srv;
-    srv.request.model_state = modelstate;
-
-
-    if (!set_model_state_client_.call(srv)) {
-        ROS_ERROR("set_model_state_client_ failed");
-    };
-}
-
-
-bool DynamicSystem_base::set_pose_in_world(){
-    // base
-    if (real_execution_ == "gazebo"){
-        // NOTE: controllers might try to return to previous pose -> stop and restart within inherited class if necessary
-        stop_controllers();
-
-        // pause physics
-        std_srvs::Empty emptySrv;
-        pause_gazebo_client_.call(emptySrv);
-        // set base in gazebo
-        set_gazebo_model_state(robo_config_.name, currentBaseTransform_);
-
-        // // set joint position in gazebo
-        // gazebo_msgs::SetModelConfigurationRequest model_configuration;
-        // model_configuration.urdf_param_name = "robot_description";
-        // model_configuration.model_name = (std::string) robo_config_.name;
-        // model_configuration.joint_names = joint_names_;
-        // model_configuration.joint_positions = current_joint_values_;
-        // gazebo_msgs::SetModelConfiguration srv2;
-        // srv2.request = model_configuration;
-        // if (!set_model_configuration_client_.call(srv2)) {
-        //     ROS_INFO("set_model_configuration_client_ failed");
-        // };
-
-        // unpause physics
-        unpause_gazebo_client_.call(emptySrv);
-
-        start_controllers();
-
-    } else {
-        ROS_WARN("Not setting the base start position in the real world. Please move manually.");
-    }
-
+bool DynamicSystem_base::set_pose_in_world() {
+    // set base
+    world_->set_model_state(robo_config_.name, currentBaseTransform_, robo_config_, cmd_base_vel_pub_);
     // arm: use controllers
-    ROS_INFO("Setting gripper to start");
-    send_arm_command(current_joint_values_, 5.0);
-    bool success = get_arm_success();
-    ROS_WARN_COND(!success, "couldn't set arm to selected start pose");
+    bool success = true;
+    if (!world_->is_analytical()) {
+        ROS_INFO("Setting gripper to start");
+        send_arm_command(current_joint_values_, 5.0);
+        success = get_arm_success();
+        ROS_WARN_COND(!success, "couldn't set arm to selected start pose");
+    }
     return success;
 }
 
-
-void DynamicSystem_base::setAllowedCollisionMatrix(
-        planning_scene::PlanningScenePtr planning_scene,
-        std::vector<std::string> obj_names,
-        bool allow
-    ){
+void DynamicSystem_base::setAllowedCollisionMatrix(planning_scene::PlanningScenePtr planning_scene, std::vector<std::string> obj_names, bool allow) {
     acm_ = planning_scene->getAllowedCollisionMatrix();
 
     std::vector<std::string> all_names;
@@ -1320,18 +1074,18 @@ void DynamicSystem_base::setAllowedCollisionMatrix(
     moveit_msgs::PlanningScene planning_scene_msg;
     planning_scene->getPlanningSceneMsg(planning_scene_msg);
 
-    for (int i=0; i<(int)planning_scene_msg.world.collision_objects.size(); ++i){
-        if (std::find(obj_names.begin(), obj_names.end(), planning_scene_msg.world.collision_objects[i].id) != obj_names.end()){
+    for (int i = 0; i < (int)planning_scene_msg.world.collision_objects.size(); ++i) {
+        if (std::find(obj_names.begin(), obj_names.end(), planning_scene_msg.world.collision_objects[i].id) != obj_names.end()) {
             // ROS_INFO("Setting all collisions with %s to %d. ", planning_scene_msg.world.collision_objects[i].id.c_str(), allow);
             // acm_.setDefaultEntry(planning_scene_msg.world.collision_objects[i].id, allow);
-            for (auto name : all_names){
-                acm_.setEntry(planning_scene_msg.world.collision_objects[i].id , name, allow);
+            for (auto name : all_names) {
+                acm_.setEntry(planning_scene_msg.world.collision_objects[i].id, name, allow);
                 acm_.setEntry(name, planning_scene_msg.world.collision_objects[i].id, allow);
             }
         } else {
             // ROS_INFO("Setting all collisions with %s to %d. ", planning_scene_msg.world.collision_objects[i].id.c_str(), !allow);
             // acm_.setDefaultEntry(planning_scene_msg.world.collision_objects[i].id, !allow);
-            for (auto name : all_names){
+            for (auto name : all_names) {
                 acm_.setEntry(planning_scene_msg.world.collision_objects[i].id, name, !allow);
                 acm_.setEntry(name, planning_scene_msg.world.collision_objects[i].id, !allow);
             }
@@ -1339,18 +1093,17 @@ void DynamicSystem_base::setAllowedCollisionMatrix(
     }
 }
 
-
-bool DynamicSystem_base::check_scene_collisions(){
+bool DynamicSystem_base::check_scene_collisions() {
     planning_scene::PlanningScenePtr planning_scene = planning_scene_monitor_->getPlanningScene();
 
     // change it only on a copy!
     robot_state::RobotState state_copy(*kinematic_state_);
-    state_copy.setVariablePosition ("world_joint/x", currentBaseTransform_.getOrigin().x());
-    state_copy.setVariablePosition ("world_joint/y", currentBaseTransform_.getOrigin().y());
-    state_copy.setVariablePosition ("world_joint/theta", currentBaseTransform_.getRotation().getAngle() * currentBaseTransform_.getRotation().getAxis().getZ());
+    state_copy.setVariablePosition("world_joint/x", currentBaseTransform_.getOrigin().x());
+    state_copy.setVariablePosition("world_joint/y", currentBaseTransform_.getOrigin().y());
+    state_copy.setVariablePosition("world_joint/theta", currentBaseTransform_.getRotation().getAngle() * currentBaseTransform_.getRotation().getAxis().getZ());
 
     collision_detection::CollisionRequest collision_request;
-    if (robo_config_.scene_collision_group_name != ""){
+    if (robo_config_.scene_collision_group_name != "") {
         collision_request.group_name = robo_config_.scene_collision_group_name;
     }
     collision_detection::CollisionResult collision_result;
@@ -1358,55 +1111,51 @@ bool DynamicSystem_base::check_scene_collisions(){
     // planning_scene->checkCollision(collision_request, collision_result, *kinematic_state_, acm_);
     planning_scene->checkCollisionUnpadded(collision_request, collision_result, state_copy, acm_);
 
-    if(collision_result.collision){
-      // ROS_WARN("Collision with scene! N collisions: %d", collision_result.contacts.size());
-      collision_detection::CollisionResult::ContactMap::const_iterator it;
-      for (it = collision_result.contacts.begin(); it != collision_result.contacts.end(); ++it){
-          ROS_INFO("Contact between: %s and %s", it->first.first.c_str(), it->first.second.c_str());
-      }
-      return true;
+    if (collision_result.collision) {
+        // ROS_WARN("Collision with scene! N collisions: %d", collision_result.contacts.size());
+        collision_detection::CollisionResult::ContactMap::const_iterator it;
+        for (it = collision_result.contacts.begin(); it != collision_result.contacts.end(); ++it) {
+            ROS_INFO("Contact between: %s and %s", it->first.first.c_str(), it->first.second.c_str());
+        }
+        return true;
     }
-  return false;
+    return false;
 }
 
-visualization_msgs::Marker DynamicSystem_base::create_vel_marker(tf::Transform current_tf, tf::Vector3 vel, std::string ns, std::string color, int marker_id){
-        visualization_msgs::Marker marker;
-        marker.header.frame_id = robo_config_.frame_id;
-        marker.header.stamp = ros::Time();
-        marker.ns = ns;
+visualization_msgs::Marker DynamicSystem_base::create_vel_marker(tf::Transform current_tf, tf::Vector3 vel, std::string ns, std::string color, int marker_id) {
+    visualization_msgs::Marker marker;
+    marker.header.frame_id = robo_config_.frame_id;
+    marker.header.stamp = ros::Time();
+    marker.ns = ns;
 
-        geometry_msgs::Point start;
-        start.x = current_tf.getOrigin().x();
-        start.y = current_tf.getOrigin().y();
-        start.z = current_tf.getOrigin().z();
-        marker.points.push_back(start);
+    geometry_msgs::Point start;
+    start.x = current_tf.getOrigin().x();
+    start.y = current_tf.getOrigin().y();
+    start.z = current_tf.getOrigin().z();
+    marker.points.push_back(start);
 
-        geometry_msgs::Point end;
-        end.x = current_tf.getOrigin().x() + vel.x();
-        end.y = current_tf.getOrigin().y() + vel.y();
-        end.z = current_tf.getOrigin().z() + vel.z();
-        marker.points.push_back(end);
+    geometry_msgs::Point end;
+    end.x = current_tf.getOrigin().x() + vel.x();
+    end.y = current_tf.getOrigin().y() + vel.y();
+    end.z = current_tf.getOrigin().z() + vel.z();
+    marker.points.push_back(end);
 
-        marker.type = visualization_msgs::Marker::ARROW;
-        marker.action = visualization_msgs::Marker::ADD;
-        marker.scale.x = 0.015;
-        marker.scale.y = 0.025;
+    marker.type = visualization_msgs::Marker::ARROW;
+    marker.action = visualization_msgs::Marker::ADD;
+    marker.scale.x = 0.015;
+    marker.scale.y = 0.025;
 
-        marker.color = utils::get_color_msg(color, 1.0);
-        marker.id = marker_id;
-        return marker;
+    marker.color = utils::get_color_msg(color, 1.0);
+    marker.id = marker_id;
+    return marker;
 }
-
 
 ////Callback for collision checking in ik search//////////////////////
-namespace validityFun
-{
+namespace validityFun {
     bool validityCallbackFn(planning_scene::PlanningScenePtr &planning_scene,
                             robot_state::RobotStatePtr kinematic_state,
                             const robot_state::JointModelGroup *joint_model_group,
-                            const double *joint_group_variable_values
-                            )
-    {
+                            const double *joint_group_variable_values) {
         kinematic_state->setJointGroupPositions(joint_model_group, joint_group_variable_values);
         // Now check for collisions
         collision_detection::CollisionRequest collision_request;
@@ -1417,10 +1166,10 @@ namespace validityFun
         planning_scene->checkCollisionUnpadded(collision_request, collision_result, *kinematic_state);
         // planning_scene->checkSelfCollision(collision_request, collision_result, *kinematic_state);
 
-        if(collision_result.collision){
-          //ROS_INFO("IK solution is in collision!");
-          return false;
+        if (collision_result.collision) {
+            // ROS_INFO("IK solution is in collision!");
+            return false;
         }
-      return true;
+        return true;
     }
 }

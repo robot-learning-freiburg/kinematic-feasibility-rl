@@ -1,34 +1,19 @@
 #include <modulation_rl/gmm_planner.h>
 
-
-GMMPlanner::GMMPlanner(
-        double min_planner_velocity,
-        double max_planner_velocity,
-        bool use_base_goal,
-        const tf::Vector3 tip_to_gripper_offset,
-        const tf::Quaternion gripper_to_base_rot_offset
-    ) : BaseGripperPlanner(
-            min_planner_velocity,
-            max_planner_velocity,
-            use_base_goal),
-        tip_to_gripper_offset_ { tip_to_gripper_offset },
-        gripper_to_base_rot_offset_ { gripper_to_base_rot_offset }
-{  };
-
-
-void GMMPlanner::reset(
-        tf::Transform gripperGoal,
-        tf::Transform initialGripperTransform,
-        tf::Transform baseGoal,
-        tf::Transform initialBaseTransform,
-        std::string gmm_model_path,
-        double gmm_base_offset
-    ){
-    // related to the size of gmm_dt_!
+GMMPlanner::GMMPlanner(const tf::Vector3 tip_to_gripper_offset,
+                       const tf::Quaternion gripper_to_base_rot_offset,
+                       tf::Transform gripperGoal,
+                       tf::Transform initialGripperTransform,
+                       tf::Transform baseGoal,
+                       tf::Transform initialBaseTransform,
+                       std::string gmm_model_path,
+                       double gmm_base_offset) :
+    BaseGripperPlanner(),
+    tip_to_gripper_offset_{tip_to_gripper_offset},
+    gripper_to_base_rot_offset_{gripper_to_base_rot_offset} {
     double max_rot = 0.1;
-
     gmm_model_path_ = gmm_model_path;
-    gaussian_mixture_model_.reset(new GaussianMixtureModel(max_planner_velocity_, max_planner_velocity_, max_rot, max_rot));
+    gaussian_mixture_model_.reset(new GaussianMixtureModel(max_rot, max_rot));
     // For each learned object manipulation there are three action models one for grasping, one for manipulation and one for releasing
     // Stick to grasp and move of KallaxTuer first.
     gaussian_mixture_model_->loadFromFile(gmm_model_path_);
@@ -39,19 +24,18 @@ void GMMPlanner::reset(
     // transform to a tip goal
     prevPlan_.nextGripperTransform = utils::gripper_to_tip_goal(initialGripperTransform, tip_to_gripper_offset_, gripper_to_base_rot_offset_);
     prevPlan_.nextBaseTransform = initialBaseTransform;
-    prevPrevPlan_ = prevPlan_;
-}
+};
 
-GripperPlan GMMPlanner::get_next_step(
-        double time,
-        double dt,
-        const tf::Transform &currentBaseTransform,
-        const tf::Vector3 &current_base_vel_world,
-        const tf::Vector3 &current_gripper_vel_world,
-        const tf::Quaternion &current_gripper_dq,
-        const GripperPlan &prevPlan,
-        bool do_update
-    ){
+GripperPlan GMMPlanner::calc_next_step(double time,
+                                       double dt,
+                                       const tf::Transform &currentBaseTransform,
+                                       const tf::Vector3 &current_base_vel_world,
+                                       const tf::Vector3 &current_gripper_vel_world,
+                                       const tf::Quaternion &current_gripper_dq,
+                                       const GripperPlan &prevPlan,
+                                       const double &min_velocity,
+                                       const double &max_velocity,
+                                       bool do_update) {
     // create eigen vectors for current pose and current speed
     // treat it as a planner that could be pre-computed: calculate next step from the transform we wanted to achieve, not the actually achieved one
     Eigen::VectorXf current_pose(14);
@@ -67,7 +51,7 @@ GripperPlan GMMPlanner::get_next_step(
                      current_base_vel_world.x(), current_base_vel_world.y(), 0.0,
                      0.0, 0.0, 0.0, 0.0;
 
-    gaussian_mixture_model_->integrateModel(time, dt, &current_pose, &current_speed, do_update);
+    gaussian_mixture_model_->integrateModel(time, dt, &current_pose, &current_speed, min_velocity, max_velocity, do_update);
 
     GripperPlan nextPlan;
     nextPlan.nextGripperTransform.setOrigin(tf::Vector3(current_pose[0], current_pose[1], current_pose[2]));
@@ -77,29 +61,40 @@ GripperPlan GMMPlanner::get_next_step(
     return nextPlan;
 }
 
-GripperPlan GMMPlanner::get_next_velocities(
-        double time,
-        double dt,
-        const tf::Transform &currentBaseTransform,
-        const tf::Transform &currentGripperTransform,
-        const tf::Vector3 &current_base_vel_world,
-        const tf::Vector3 &current_gripper_vel_world,
-        const tf::Quaternion &current_gripper_dq,
-        bool update_prev_plan
-    ){
-    GripperPlan nextPlan = get_next_step(
-        time,
-        dt,
-        currentBaseTransform,
-        current_base_vel_world,
-        current_gripper_vel_world,
-        current_gripper_dq,
-        prevPlan_,
-        true
-    );
+GripperPlan GMMPlanner::get_next_velocities(double time,
+                                            double dt,
+                                            const tf::Transform &currentBaseTransform,
+                                            const tf::Transform &currentGripperTransform,
+                                            const tf::Vector3 &current_base_vel_world,
+                                            const tf::Vector3 &current_gripper_vel_world,
+                                            const tf::Quaternion &current_gripper_dq,
+                                            const double &min_velocity,
+                                            const double &max_velocity,
+                                            bool update_prev_plan) {
+    // ROS_INFO("gmmPlanner time slowed: %f, dt: %f", time, dt);
+    // utils::print_t(prevPlan_.nextGripperTransform, "prevPlan_.nextGripperTransform Tip");
+    // utils::print_t(prevPlan_.nextBaseTransform, "prevPlan_.nextBaseTransform");
+
+    // utils::print_vector3(current_base_vel_world, "current_base_vel_world");
+    // utils::print_vector3(current_gripper_vel_world, "current_gripper_vel_world");
+    // utils::print_q(current_gripper_dq, "current_gripper_dq");
+
+    double min_vel, max_vel;
+    min_vel = 0.0;
+    max_vel = max_velocity;
+
+    GripperPlan nextPlan = calc_next_step(time,
+                                          dt,
+                                          currentBaseTransform,
+                                          current_base_vel_world,
+                                          current_gripper_vel_world,
+                                          current_gripper_dq,
+                                          prevPlan_,
+                                          min_vel,
+                                          max_vel,
+                                          update_prev_plan);
 
     if (update_prev_plan){
-        prevPrevPlan_ = prevPlan_;
         prevPlan_ = nextPlan;
     }
 
@@ -109,34 +104,8 @@ GripperPlan GMMPlanner::get_next_velocities(
     return nextPlanWrist;
 }
 
-GripperPlan GMMPlanner::get_velocities_from_prevPrev(
-        double time,
-        double dt,
-        const tf::Transform &currentBaseTransform,
-        const tf::Transform &currentGripperTransform,
-        const tf::Vector3 &current_base_vel_world,
-        const tf::Vector3 &current_gripper_vel_world,
-        const tf::Quaternion &current_gripper_dq
-    ){
-    GripperPlan nextPlan = get_next_step(
-        time,
-        dt,
-        currentBaseTransform,
-        current_base_vel_world,
-        current_gripper_vel_world,
-        current_gripper_dq,
-        prevPrevPlan_,
-        false
-    );
-
-    GripperPlan nextPlanWrist = nextPlan;
-    nextPlanWrist.nextGripperTransform = utils::tip_to_gripper_goal(nextPlan.nextGripperTransform, tip_to_gripper_offset_, gripper_to_base_rot_offset_);
-
-    return nextPlanWrist;
-}
-
 // GMM takes the origin of the door as input goal -> transform to the wrist goal which is used in the rest of the env
-tf::Transform GMMPlanner::get_last_attractor(){
+tf::Transform GMMPlanner::get_last_attractor() {
     // goalState returns the values from the csv. Prob. relative to door origin or similar
     // tf::StampedTransform goalState = gaussian_mixture_model_->getGoalState();
     // tf::Transform goalStateWrist(goalState);
@@ -144,22 +113,22 @@ tf::Transform GMMPlanner::get_last_attractor(){
     // muEigen seems to directly give us the wrist goal
     tf::Transform last_attractor;
     std::vector<Eigen::VectorXf> muEigen = gaussian_mixture_model_->getMu();
-    last_attractor.setOrigin(tf::Vector3(muEigen[nrModes-1][1], muEigen[nrModes-1][2], muEigen[nrModes-1][3]));
-    last_attractor.setRotation(tf::Quaternion(muEigen[nrModes-1][4], muEigen[nrModes-1][5], muEigen[nrModes-1][6], muEigen[nrModes-1][7]));
+    last_attractor.setOrigin(tf::Vector3(muEigen[nrModes - 1][1], muEigen[nrModes - 1][2], muEigen[nrModes - 1][3]));
+    last_attractor.setRotation(tf::Quaternion(muEigen[nrModes - 1][4], muEigen[nrModes - 1][5], muEigen[nrModes - 1][6], muEigen[nrModes - 1][7]));
     return last_attractor;
 }
 
-GripperPlan GMMPlanner::get_prev_plan(){
+GripperPlan GMMPlanner::get_prev_plan() {
     GripperPlan nextPlan = BaseGripperPlanner::get_prev_plan();
     nextPlan.nextGripperTransform = utils::tip_to_gripper_goal(nextPlan.nextGripperTransform, tip_to_gripper_offset_, gripper_to_base_rot_offset_);
     return nextPlan;
 }
 
-std::vector<tf::Transform> GMMPlanner::get_mus(){
+std::vector<tf::Transform> GMMPlanner::get_mus() {
     int nrModes = gaussian_mixture_model_->getNr_modes();
     std::vector<tf::Transform> v;
 
-    for (int i=0; i<nrModes; i++){
+    for (int i = 0; i < nrModes; i++) {
         std::vector<Eigen::VectorXf> muEigen = gaussian_mixture_model_->getMu();
 
         tf::Transform gripper_t;

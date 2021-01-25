@@ -1,20 +1,21 @@
-import time
-from typing import List
-from pathlib import Path
-from collections import namedtuple
-import random
-import numpy as np
-from gym import Wrapper
 import copy
+import random
+import time
+from collections import namedtuple
 from enum import IntEnum
-from matplotlib import pyplot as plt
-from matplotlib.colors import Normalize
-from matplotlib import cm
+from pathlib import Path
+from typing import List
 
+import numpy as np
 import rospy
 from geometry_msgs.msg import Pose, Quaternion, Point
-from modulation.envs.myGazebo import MyGazebo, GazeboObject
+from gym import Wrapper
+from matplotlib import cm
+from matplotlib import pyplot as plt
+from matplotlib.colors import Normalize
+
 from modulation.envs.modulationEnv import ModulationEnv
+from modulation.envs.myGazebo import MyGazebo, GazeboObject
 from modulation.utils import rpy_to_quiver_uvw
 
 
@@ -23,11 +24,11 @@ class GripperActions(IntEnum):
     OPEN = 1
     GRASP = 2
 
-TaskGoal = namedtuple("TaskGoal", ['pose', 'motion_plan', 'end_action', 'success_thres_dist', 'success_thres_rot'])
+TaskGoal = namedtuple("TaskGoal", ['pose', 'motion_plan', 'end_action', 'success_thres_dist', 'success_thres_rot', 'start_pause'])
 
 
 def ask_user_goal(goal_name: str, default_value: list, use_quaternion_rot: bool):
-    if use_quaternion_rot :
+    if use_quaternion_rot:
         fmt = "[x y z X Y Z W]"
         goal_len = 7
     else:
@@ -174,7 +175,8 @@ class RndStartFixedGoalsTask(BaseTask):
         self._last_goal = (self._last_goal + 1) % len(self.eval_goals)
         return next_goal
 
-    def reset(self, gripper_goal: list = None, start_pose_distribition: str = None, gripper_goal_distribution: str = None, base_start: list = None):
+    def reset(self, gripper_goal: list = None, start_pose_distribition: str = None,
+              gripper_goal_distribution: str = None, base_start: list = None):
         return super(RndStartFixedGoalsTask, self).reset(gripper_goal=self._get_next_goal())
 
     def visualise_goals(self, kin_fails):
@@ -194,6 +196,7 @@ class RndStartFixedGoalsTask(BaseTask):
 
 class BaseChainedTask(BaseTask):
     GRIPPER_CLOSED_AT_START = True
+    SUBGOAL_PAUSE = 2
 
     def __init__(self, env: ModulationEnv, without_objects: bool):
         super(BaseChainedTask, self).__init__(env=env,
@@ -220,28 +223,36 @@ class BaseChainedTask(BaseTask):
         raise NotImplementedError()
 
     def reset(self, gripper_goal: list = None, start_pose_distribition: str = None, gripper_goal_distribution: str = None, base_start: list = None):
-        # first reset, then spawn scene & set actual goal to ensure we don't spawn objects into robot
+        # realworld: spawn scene, then reset so the user prompt appears before setting the next start pose
+        # gazebo: first reset, then spawn scene & set actual goal to ensure we don't spawn objects into robot
+        if self.env.get_real_execution() == "world":
+            self._goals = self.spawn_scene()
+
         super(BaseChainedTask, self).reset(base_start=self.BASE_START_RNG,
                                            close_gripper=self.GRIPPER_CLOSED_AT_START)
         if not self.GRIPPER_CLOSED_AT_START:
-            self.env.open_gripper()
+            self.env.open_gripper(wait_for_result=False)
+
+        if self.env.get_real_execution() != "world":
+            self._gazebo.pause_physics()
+            self._goals = self.spawn_scene()
+            if self._without_objects:
+                self._gazebo.delete_all_spawned()
+            self._gazebo.unpause_physics()
 
         self._current_goal = 0
-        self._gazebo.pause_physics()
-        self._goals = self.spawn_scene()
-        if self._without_objects:
-            self._gazebo.delete_all_spawned()
-        self._gazebo.unpause_physics()
         first_goal = self._goals[self._current_goal]
 
         return self.env.set_gripper_goal(goal=first_goal.pose, gripper_goal_distribution=None, gmm_model_path=first_goal.motion_plan,
-                                         success_thres_dist=self._success_thres_dist, success_thres_rot=self._success_thres_rot)
+                                         success_thres_dist=self._success_thres_dist, success_thres_rot=self._success_thres_rot,
+                                         start_pause=None)
 
     def _episode_cleanup(self):
-        self.env.open_gripper()
-        self._gazebo.pause_physics()
-        self._gazebo.delete_all_spawned()
-        self._gazebo.unpause_physics()
+        self.env.open_gripper(wait_for_result=False)
+        if self._gazebo is not None:
+            self._gazebo.pause_physics()
+            self._gazebo.delete_all_spawned()
+            self._gazebo.unpause_physics()
 
     def step(self, action, eval=False):
         normed_stacked_obs, reward, done_return, info = self.env.step(action=action, eval=eval)
@@ -249,23 +260,29 @@ class BaseChainedTask(BaseTask):
         interactive = self.env.get_real_execution() == "world"
         if done_return == 1:
             end_action = self._goals[self._current_goal].end_action
-            if interactive:
-                input(f"Goal {self._current_goal} reached. Enter to {end_action} and start next goal.")
+            # if interactive:
+            #     input(f"Goal {self._current_goal} reached. Enter to {end_action} and start next goal.")
             if end_action == GripperActions.GRASP:
                 self.grasp()
             elif end_action == GripperActions.OPEN:
-                self.env.open_gripper()
+                self.env.open_gripper(wait_for_result=False)
 
             if self._current_goal < len(self._goals) - 1:
                 new = self._goals[self._current_goal + 1]
                 self.env.set_gripper_goal(goal=new.pose, gripper_goal_distribution=None, gmm_model_path=new.motion_plan,
-                                          success_thres_dist=new.success_thres_dist, success_thres_rot=new.success_thres_rot)
+                                          success_thres_dist=new.success_thres_dist, success_thres_rot=new.success_thres_rot,
+                                          start_pause=self._goals[self._current_goal].start_pause)
                 self._current_goal += 1
                 done_return = 0
 
         # ensure nothing left attached to the robot / the robot could spawn into / ...
         if done_return:
             self._episode_cleanup()
+
+            if interactive:
+                # indicator from where we should start next episode. To be manually navigated to
+                next_base_start_pose = [random.uniform(0.5, 2.5), random.uniform(0, 1.5), 0] + [0, 0, random.uniform(BASE_START_RNG[4], BASE_START_RNG[5])]
+                self.env.add_goal_marker(g.pose, 99999, "pink")
 
         return normed_stacked_obs, reward, done_return, info
 
@@ -277,9 +294,10 @@ class BaseChainedTask(BaseTask):
 
 class PickNPlaceChainedTask(BaseChainedTask):
     # [min_x, max_x, min_y, max_y, min_yaw, max_yaw (radians)]
-    BASE_START_RNG = [-1.5, 1.5, -1.5, 1.5, -0.5*np.pi, 0.5*np.pi]
+    BASE_START_RNG = [-1.5, 1.5, -1.5, 1.5, -0.5 * np.pi, 0.5 * np.pi]
     START_TABLE_POS = Point(x=3, y=0, z=0)
     END_TABLE_RNG = [-1.5, 2, -3, -2.5]
+    GRIPPER_CLOSED_AT_START = False
 
     @property
     def taskname(self) -> str:
@@ -297,7 +315,7 @@ class PickNPlaceChainedTask(BaseChainedTask):
 
         # real world helpers
         self._rw_last_object_loc = None
-        self._rw_place_loc = None
+        self._rw_place_loc = [-1, -1, -1, -1, -1, -1]
 
         self.reset()
 
@@ -319,14 +337,22 @@ class PickNPlaceChainedTask(BaseChainedTask):
             place_loc = ask_user_goal(goal_name='PLACED object location', default_value=self._rw_place_loc, use_quaternion_rot=False)
             self._rw_place_loc = place_loc
 
+            if all(np.array(place_loc) == -1):
+                place_loc = [random.uniform(1.2, 2.5), -0.85, 0.58, 0, 0, -1.57]
+
             # NOTE: assumes place loc is 90 degree & to the right of the origin
             in_front_of_place_loc = copy.deepcopy(place_loc)
             in_front_of_place_loc[1] += 0.2
+            in_front_of_place_loc[2] += 0.1
 
-            goals = [TaskGoal(pose=in_front_of_obj_loc, motion_plan="", end_action=GripperActions.OPEN, success_thres_dist=self._success_thres_dist, success_thres_rot=self._success_thres_rot),
-                     TaskGoal(pose=obj_loc, motion_plan="", end_action=GripperActions.GRASP, success_thres_dist=self._success_thres_dist, success_thres_rot=self._success_thres_rot),
-                     TaskGoal(pose=in_front_of_place_loc, motion_plan="", end_action=GripperActions.NONE, success_thres_dist=self._success_thres_dist, success_thres_rot=self._success_thres_rot),
-                     TaskGoal(pose=place_loc, motion_plan="", end_action=GripperActions.OPEN, success_thres_dist=self._success_thres_dist, success_thres_rot=self._success_thres_rot)]
+            above_obj_loc = copy.deepcopy(obj_loc)
+            above_obj_loc[2] += 0.1
+
+            goals = [TaskGoal(pose=in_front_of_obj_loc, motion_plan="", end_action=GripperActions.OPEN, success_thres_dist=self._success_thres_dist, success_thres_rot=self._success_thres_rot, start_pause=0),
+                     TaskGoal(pose=obj_loc, motion_plan="", end_action=GripperActions.GRASP, success_thres_dist=self._success_thres_dist, success_thres_rot=self._success_thres_rot, start_pause=self.SUBGOAL_PAUSE),
+                     TaskGoal(pose=above_obj_loc, motion_plan="", end_action=GripperActions.GRASP, success_thres_dist=self._success_thres_dist, success_thres_rot=self._success_thres_rot, start_pause=0),
+                     TaskGoal(pose=in_front_of_place_loc, motion_plan="", end_action=GripperActions.NONE, success_thres_dist=self._success_thres_dist, success_thres_rot=self._success_thres_rot, start_pause=0),
+                     TaskGoal(pose=place_loc, motion_plan="", end_action=GripperActions.OPEN, success_thres_dist=self._success_thres_dist, success_thres_rot=self._success_thres_rot, start_pause=0)]
         else:
             self._gazebo.delete_all_spawned()
             # self._gazebo.reset_world()
@@ -390,10 +416,10 @@ class PickNPlaceChainedTask(BaseChainedTask):
                 in_front_of_place_loc = copy.deepcopy(place_loc)
                 in_front_of_place_loc[1] += 0.2
 
-                return [TaskGoal(pose=in_front_of_obj_loc, motion_plan="", end_action=GripperActions.OPEN, success_thres_dist=self._success_thres_dist, success_thres_rot=self._success_thres_rot),
-                        TaskGoal(pose=obj_loc, motion_plan="", end_action=GripperActions.GRASP, success_thres_dist=self._success_thres_dist, success_thres_rot=self._success_thres_rot),
-                        TaskGoal(pose=in_front_of_place_loc, motion_plan="", end_action=GripperActions.NONE, success_thres_dist=self._success_thres_dist, success_thres_rot=self._success_thres_rot),
-                        TaskGoal(pose=place_loc, motion_plan="", end_action=GripperActions.OPEN, success_thres_dist=self._success_thres_dist, success_thres_rot=self._success_thres_rot)]
+                return [TaskGoal(pose=in_front_of_obj_loc, motion_plan="", end_action=GripperActions.OPEN, success_thres_dist=self._success_thres_dist, success_thres_rot=self._success_thres_rot, start_pause=0),
+                        TaskGoal(pose=obj_loc, motion_plan="", end_action=GripperActions.GRASP, success_thres_dist=self._success_thres_dist, success_thres_rot=self._success_thres_rot, start_pause=self.SUBGOAL_PAUSE),
+                        TaskGoal(pose=in_front_of_place_loc, motion_plan="", end_action=GripperActions.NONE, success_thres_dist=self._success_thres_dist, success_thres_rot=self._success_thres_rot, start_pause=0),
+                        TaskGoal(pose=place_loc, motion_plan="", end_action=GripperActions.OPEN, success_thres_dist=self._success_thres_dist, success_thres_rot=self._success_thres_rot, start_pause=0)]
 
             # goals = get_grip_from_above_goals()
             goals = get_grip_from_front_goals()
@@ -404,16 +430,18 @@ class PickNPlaceChainedTask(BaseChainedTask):
         return goals
 
     def grasp(self):
+        wait_for_result = (self.SUBGOAL_PAUSE == 0)
         if self.env.get_real_execution() == "world":
-            self.env.close_gripper(self._pick_obj.x - 0.02)
+            self.env.close_gripper(self._pick_obj.x - 0.02, wait_for_result)
         else:
-            self.env.close_gripper(0.0)
+            self.env.close_gripper(0.0, wait_for_result)
 
 
 class DoorChainedTask(BaseChainedTask):
     GRIPPER_CLOSED_AT_START = False
     BASE_START_RNG = [-1.5, 1.5, -1.5, 1.5, -0.0 * np.pi, 1.0 * np.pi]
     SHELF_POS = Point(x=0.0, y=3.0, z=0.24)
+
     # DOOR_ANGLE_OPEN_RNG = [np.pi / 4, np.pi / 2]
 
     @property
@@ -444,8 +472,12 @@ class DoorChainedTask(BaseChainedTask):
             input("dummy input")
             gripper_goal = ask_user_goal(goal_name='CLOSED door origin', default_value=self._rw_last_door_goal, use_quaternion_rot=True)
             self._rw_last_door_goal = gripper_goal
-            grasp_goal = TaskGoal(pose=gripper_goal, motion_plan=str(self._motion_model_path / "GMM_grasp_KallaxTuer.csv"), end_action=GripperActions.GRASP,
-                                  success_thres_dist=self._success_thres_dist, success_thres_rot=self._success_thres_rot)
+            grasp_goal = TaskGoal(pose=gripper_goal,
+                                  motion_plan=str(self._motion_model_path / "GMM_grasp_KallaxTuer.csv"),
+                                  end_action=GripperActions.GRASP,
+                                  success_thres_dist=self._success_thres_dist,
+                                  success_thres_rot=self._success_thres_rot,
+                                  start_pause=self.SUBGOAL_PAUSE)
         else:
             self._gazebo.delete_all_spawned()
 
@@ -464,7 +496,8 @@ class DoorChainedTask(BaseChainedTask):
                                   motion_plan=str(self._motion_model_path / "GMM_grasp_KallaxTuer.csv"),
                                   end_action=GripperActions.GRASP,
                                   success_thres_dist=self._success_thres_dist,
-                                  success_thres_rot=self._success_thres_rot)
+                                  success_thres_rot=self._success_thres_rot,
+                                  start_pause=self.SUBGOAL_PAUSE)
 
         # opening goal: expects the object pose in the beginning of the movement
         # angle = random.uniform(self.DOOR_ANGLE_OPEN_RNG[0], self.DOOR_ANGLE_OPEN_RNG[1])
@@ -474,14 +507,15 @@ class DoorChainedTask(BaseChainedTask):
                                 motion_plan=str(self._motion_model_path / "GMM_move_KallaxTuer.csv"),
                                 end_action=GripperActions.OPEN,
                                 success_thres_dist=self._success_thres_dist,
-                                success_thres_rot=self._success_thres_rot)
+                                success_thres_rot=self._success_thres_rot,
+                                start_pause=0)
 
         # release goal: expects the object pose in the beginning of the movement -> leave undefined here and add after completing the open movement
         # for goals that start at pose 0
         # release_goal = DoorGoal(pose=None,
         #                         motion_plan=str(self._motion_model_path / "GMM_release_KallaxTuer.csv"))
 
-        goals = [grasp_goal, opening_goal] #, release_goal]
+        goals = [grasp_goal, opening_goal]  # , release_goal]
 
         # for i, g in enumerate(goals):
         #     self.env.add_goal_marker(g.pose, 9999 + i)
@@ -489,10 +523,11 @@ class DoorChainedTask(BaseChainedTask):
         return goals
 
     def grasp(self):
+        wait_for_result = (self.SUBGOAL_PAUSE == 0)
         if self.env.get_real_execution() == "world":
-            self.env.close_gripper(0.005)
+            self.env.close_gripper(0.005, wait_for_result)
         else:
-            self.env.close_gripper(0.0)
+            self.env.close_gripper(0.0, wait_for_result)
 
 
 class DrawerChainedTask(BaseChainedTask):
@@ -527,7 +562,12 @@ class DrawerChainedTask(BaseChainedTask):
             input("dummy input")
             gripper_goal = ask_user_goal(goal_name='CLOSED drawer origin', default_value=self._rw_last_drawer_goal, use_quaternion_rot=True)
             self._rw_last_drawer_goal = gripper_goal
-            grasp_goal = TaskGoal(pose=gripper_goal, motion_plan=str(self._motion_model_path / "GMM_grasp_KallaxDrawer.csv"), end_action=GripperActions.GRASP, success_thres_dist=self._success_thres_dist, success_thres_rot=self._success_thres_rot)
+            grasp_goal = TaskGoal(pose=gripper_goal,
+                                  motion_plan=str(self._motion_model_path / "GMM_grasp_KallaxDrawer.csv"),
+                                  end_action=GripperActions.GRASP,
+                                  success_thres_dist=self._success_thres_dist,
+                                  success_thres_rot=self._success_thres_rot,
+                                  start_pause=self.SUBGOAL_PAUSE)
         else:
             self._gazebo.delete_all_spawned()
 
@@ -546,15 +586,17 @@ class DrawerChainedTask(BaseChainedTask):
                                   motion_plan=str(self._motion_model_path / "GMM_grasp_KallaxDrawer.csv"),
                                   end_action=GripperActions.GRASP,
                                   success_thres_dist=self._success_thres_dist,
-                                  success_thres_rot=self._success_thres_rot)
+                                  success_thres_rot=self._success_thres_rot,
+                                  start_pause=self.SUBGOAL_PAUSE)
 
         opening_goal = TaskGoal(pose=grasp_goal.pose,
                                 motion_plan=str(self._motion_model_path / "GMM_move_KallaxDrawer.csv"),
                                 end_action=GripperActions.OPEN,
                                 success_thres_dist=self._success_thres_dist,
-                                success_thres_rot=self._success_thres_rot)
+                                success_thres_rot=self._success_thres_rot,
+                                start_pause=0)
 
-        goals = [grasp_goal, opening_goal] #, release_goal]
+        goals = [grasp_goal, opening_goal]  # , release_goal]
 
         # for i, g in enumerate(goals):
         #     self.env.add_goal_marker(g.pose, 9999 + i)
@@ -562,7 +604,8 @@ class DrawerChainedTask(BaseChainedTask):
         return goals
 
     def grasp(self):
+        wait_for_result = (self.SUBGOAL_PAUSE == 0)
         if self.env.get_real_execution() == "world":
-            self.env.close_gripper(0.005)
+            self.env.close_gripper(0.005, wait_for_result)
         else:
-            self.env.close_gripper(0.0)
+            self.env.close_gripper(0.0, wait_for_result)
