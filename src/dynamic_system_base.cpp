@@ -673,7 +673,7 @@ bool DynamicSystem_base::find_ik(const Eigen::Isometry3d &desiredState, const tf
     // kinematics::KinematicsQueryOptions ik_options;
     // ik_options.return_approximate_solution = true;
     if (perform_collision_check_){
-        bool success = kinematic_state_->setFromIK(joint_model_group_, desiredState, 0.01, constraint_callback_fn_);
+        bool success = kinematic_state_->setFromIK(joint_model_group_, desiredState, 0.05, constraint_callback_fn_);
         if (!success){
             // in case of a collision keep the current position
             // can apply this to any case of ik failure as moveit does not seem to set it to the next best solution anyway
@@ -681,8 +681,7 @@ bool DynamicSystem_base::find_ik(const Eigen::Isometry3d &desiredState, const tf
         }
         return success;
     } else {
-        // return kinematic_state_->setFromIK(joint_model_group_, desiredState, 5, 0.1, moveit::core::GroupStateValidityCallbackFn(), ik_options);
-        return kinematic_state_->setFromIK(joint_model_group_, desiredState, 0.01);
+        return kinematic_state_->setFromIK(joint_model_group_, desiredState, 0.05);
     }
 }
 
