@@ -1,7 +1,6 @@
 # Learning Kinematic Feasibility
 
-Repository providing the source code for the paper "Learning kinematic feasibility through reinforcement learning", see the [project website](https://rl.uni-freiburg.de/research/kinematic-feasibility-rl).  
-Please cite the paper as follows:
+Repository providing the source code for the paper "Learning kinematic feasibility through reinforcement learning", see the [project website](https://rl.uni-freiburg.de/research/kinematic-feasibility-rl). Please cite the paper as follows:
 
     @article{honerkamp2021learning,
       title={Learning Kinematic Feasibility for Mobile Manipulation through Deep Reinforcement Learning}, 
@@ -142,3 +141,7 @@ For more details and how to install the ROS requirements for the other robots pl
 - Library conflicts: error message either around `cv2` or `libgcc_s.so.1 must be installed for pthread_cancel to work`:
     Solution: rename cv2 installed by ROS: 
     https://stackoverflow.com/questions/48039563/import-error-ros-python3-opencv
+
+
+## Acknowledgements
+This work was partly funded by the European Union’s Horizon 2020 research and innovation program under grant agreement No 871449-OpenDR and a research grant from the Eva Mayr-Stihl Stiftung.
